@@ -1,0 +1,1113 @@
+WYRM
+COMPLETE GAME DESIGN DOCUMENT
+Implementation Reference v1.0  ·  2026
+This document contains every rule, coordinate, data structure, color value, edge case, and
+visual specification required to implement WYRM from scratch without further clarification.
+Players
+2 – 4
+Age
+10+
+Duration
+45 – 75 minutes (2p: ~45min, 4p: ~75min)
+Genre
+Abstract strategy / Race / Tile management
+Influences
+Snake · Ludo · Checkers · Shogi · Mahjong
+Grid size
+12 × 12 cells
+Win conditions
+Sacred Grove (race) · Domination (capture)
+1. Game Concept & Design Philosophy
+WYRM is a 2–4 player abstract strategy board game in which players control a team of three serpents (Wyrms) competing to claim the Sacred Grove at the centre of a 12×12 grid. Every Wyrm leaves a coloured trail of territory as it moves — making the board progressively more dangerous with each turn. Trails block all pieces (including friendly ones), so every decision is simultaneously an advance and a future constraint.
+The game is intentionally easier to learn than Chess but richer than its individual inspirations. It achieves this through layered mechanics: the trail system introduces spatial pressure; the tile hand introduces resource management; the Hoard introduces reversibility; and the Elder promotion introduces a power arc without requiring complex piece hierarchies.
+1.1  Design Influences
+Game
+Mechanic borrowed
+How it manifests in WYRM
+Snake
+Trail / self-blocking movement
+Every vacated cell becomes a trail marker that blocks movement for 3 rounds.
+Ludo
+Multi-piece race with corner Dens
+Each player has 3 Wyrms starting in a 2×2 corner Den; race 2 to the centre.
+Checkers
+Capture by landing + promotion
+Land on opponent = capture. Reach enemy Den corner = promote to Elder Wyrm.
+Shogi
+Captured pieces enter your reserve
+Captured Wyrms go to your Hoard and can be redeployed into your Den later.
+Mahjong
+Collect tile sets for bonus powers
+Hold 3 identical Rune Tiles simultaneously to trigger a board-altering Lair Power.
+1.2  Core Design Tensions
+Trail as weapon and cage — the further you move, the more you block yourself.
+Racing vs capturing — pursuing Grove victory means leaving your Wyrms vulnerable.
+Single tile utility vs set patience — burn a tile now or hold for a Lair Power?
+Movement speed vs Elder promotion — a detour to an enemy Den gives lasting advantage at a tempo cost.
+2. Board Specification
+The board is a 12×12 grid. Columns are indexed 0–11 (left to right). Rows are indexed 0–11 (top to bottom). A cell is addressed as (row, col) or equivalently written as ROW,COL in data format.
+2.1  Zone Map
+Zone
+Cells (row,col)
+Color (hex)
+Purpose
+Player 1 Den
+(0,0) (0,1) (1,0) (1,1)
+D8D6F8  (Purple-50)
+P1 start zone; safe deploy; promotes P2/3/4 Wyrms to Elder if reached.
+Player 2 Den
+(0,10)(0,11)(1,10)(1,11)
+F5C4B3  (Coral-100)
+P2 start zone.
+Player 3 Den
+(10,0)(10,1)(11,0)(11,1)
+9FE1CB  (Teal-100)
+P3 start zone.
+Player 4 Den
+(10,10)(10,11)(11,10)(11,11)
+FAC775  (Amber-100)
+P4 start zone.
+Sacred Grove
+(5,5)(5,6)(6,5)(6,6)
+EF9F27  (Amber-400)
+Victory zone; get 2 Wyrms here simultaneously to win.
+Power Rune spots
+See §2.3
+FAEEDA  (Amber-50)
+8 special cells; land here to draw 2 tiles next turn.
+Open terrain
+All other 116 cells
+F0EDE4  (warm off-white)
+Normal movement; no special properties.
+2.2  Sacred Grove — Exact Coordinates
+The Sacred Grove occupies the exact centre of the 12×12 grid: cells (5,5), (5,6), (6,5), and (6,6). It is rendered as a 2×2 golden zone. Winning requires exactly two or more of a player's Wyrms to occupy any cells within this zone simultaneously at the end of any move action.
+2.3  Power Rune Spot Coordinates
+Spot #
+Row
+Col
+Description
+PRune-1
+2
+5
+Mid-left column, upper
+PRune-2
+2
+6
+Mid-right column, upper
+PRune-3
+5
+2
+Mid-left row, left
+PRune-4
+6
+2
+Mid-right row, left
+PRune-5
+9
+5
+Mid-left column, lower
+PRune-6
+9
+6
+Mid-right column, lower
+PRune-7
+5
+9
+Mid-left row, right
+PRune-8
+6
+9
+Mid-right row, right
+📌  Power Rune spots are symmetrically placed — 8 cells equidistant from the corners and from each other, forming a ring around the Sacred Grove at approximately half-radius distance.
+2.4  Den Corner Cells (Promotion Triggers)
+Any of the 4 cells within an opponent's Den acts as a promotion trigger. When an opponent's regular Wyrm lands on any of these 4 cells, it is immediately promoted to Elder Wyrm. The Den is a 2×2 zone, and all 4 cells are equally valid promotion triggers.
+2.5  Visual Design Spec
+Element
+Visual spec
+Board background
+Warm off-white: #F0EDE4
+Grid lines
+0.5px, rgba(0,0,0,0.07) — very subtle, visible but non-distracting
+Border of board
+1.5px solid #888780 with border-radius 4px (or equivalent)
+Player 1 Den fill
+#D8D6F8 — Purple-100
+Player 2 Den fill
+#F5C4B3 — Coral-100
+Player 3 Den fill
+#9FE1CB — Teal-100
+Player 4 Den fill
+#FAC775 — Amber-100
+Sacred Grove fill
+#EF9F27 — Amber-400
+Power Rune spots
+Amber diamond icon (◆) 9×9px centered in cell, #BA7517
+Cell size (desktop)
+44px × 44px recommended minimum for touch targets
+Cell size (mobile)
+28px × 28px minimum; board may need to scroll
+3. Component Specification
+3.1  Complete Component List
+Component
+Quantity
+Per player
+Notes
+Game board (12×12)
+1
+—
+Physical or digital; see §2 for zone map.
+Wyrm tokens (regular)
+12
+3
+Circular disc, player colour, labelled W.
+Elder Wyrm tokens
+4
+1
+Same size disc, golden border, star symbol ★.
+Trail markers
+80
+20
+Small squares, player colour, three opacity levels.
+Hoard trays
+4
+1
+Small card tray to hold captured Wyrms.
+Rune Tile deck
+40
+—
+8 types × 5 copies each; see §6 for full spec.
+Power Rune tokens
+8
+—
+Amber diamond shape; placed on PRune spots at start.
+Wall tiles
+8
+—
+Dark square, X symbol; placed by Earth Rune tile.
+Sacred Grove overlay
+1
+—
+2×2 golden tile placed at centre at game start.
+Player reference cards
+4
+1
+Quick-reference card; see §10 for content.
+Rune Die (custom d6)
+1
+—
+6 faces: 1, 2, 3, 4, Coil(⊕), Surge(⚡); see §5.
+3.2  Token Visual Specification
+Player
+Primary color
+Hex
+Elder border color
+Trail marker color
+Trail hex
+Player 1 (Purple)
+Purple
+#534AB7
+#534AB7 border on #EEEDFE fill
+Purple gradient opacity
+#AFA9EC
+Player 2 (Coral)
+Coral
+#D85A30
+#D85A30 border on #FAECE7 fill
+Coral gradient opacity
+#F0997B
+Player 3 (Teal)
+Teal
+#1D9E75
+#1D9E75 border on #E1F5EE fill
+Teal gradient opacity
+#5DCAA5
+Player 4 (Amber)
+Amber
+#BA7517
+#BA7517 border on #FAEEDA fill
+Amber gradient opacity
+#EF9F27
+📌  Trail markers use three distinct opacity levels: Fresh (100% / round 1 of 3), Fading (55% / round 2), Old (28% / round 3). They are removed after 3 full rounds.
+3.3  Token Sizing (Physical)
+Regular Wyrm token: 28mm diameter circular disc, 3mm thick
+Elder Wyrm token: 28mm diameter, golden 2px border ring, ★ centred in 14pt
+Trail marker: 12mm × 12mm square tile, 2mm thick
+Wall tile: 14mm × 14mm square tile, 2mm thick, near-black (#2C2C2A) with white ✕
+Power Rune token: 10mm × 10mm diamond (square rotated 45°), amber (#BA7517)
+Hoard tray: 60mm × 40mm cardboard tray to hold up to 3 Wyrm tokens
+4. Complete Game Rules
+4.1  Objective
+A player wins by achieving exactly one of two victory conditions:
+Sacred Grove Victory — Have 2 or more of your Wyrms inside the Sacred Grove (the 4 central cells) simultaneously at any point during your Move step.
+Domination Victory — Capture all 3 Wyrms belonging to any one opponent such that all 3 are simultaneously present in your Hoard tray.
+⚠  Victory is checked immediately after each capture or move action. A player can win mid-turn. The game ends the instant a victory condition is met.
+4.2  Setup Procedure
+Place the board in the centre of play area.
+Place the Sacred Grove overlay on cells (5,5), (5,6), (6,5), (6,6).
+Place one Power Rune token on each of the 8 PRune spots (§2.3).
+Shuffle the 40 Rune Tiles. Place the deck face-down beside the board. Clear space for a discard pile adjacent to the deck.
+Assign player colours (Purple / Coral / Teal / Amber). Each player takes: 3 Wyrm tokens, 1 Elder token (set aside — not yet in play), 20 trail markers, 1 hoard tray.
+Each player places all 3 of their Wyrm tokens in their corner Den.
+Each player draws 4 Rune Tiles as their opening hand.
+The youngest player takes the first turn. Play passes clockwise.
+4.3  Turn Structure
+On every turn, a player must execute these 4 steps exactly in order:
+Step 1 — DRAW
+Take 1 Rune Tile from the top of the deck and add it to your hand.
+→ If you are currently standing on a Power Rune spot: draw 2 tiles instead. Remove the PRune token (permanent).
+→ Maximum hand size is 5. If drawing would bring you to 6+, you must discard to 5 immediately — your choice.
+→ If the deck is empty: shuffle the discard pile to form a new deck before drawing.
+Step 2 — ROLL
+Roll the Rune Die (custom d6). Note the result.
+→ If your active Wyrm is an Elder: you do NOT use the die roll for movement. Skip mentally to Step 3.
+→ All other Wyrms: the die result defines exact mandatory movement spaces.
+Step 3 — MOVE
+Option A (Move a Wyrm): Move one of your Wyrms on the board exactly the rolled number of spaces. Elders move 1–3 freely.
+Option B (Deploy from Hoard): Instead of moving, place one Wyrm from your Hoard tray into any empty cell inside your own Den. No trail is placed. Roll is ignored.
+→ You cannot do both Option A and Option B in the same turn.
+→ After any capture: check Domination Victory immediately.
+→ After any movement: check Sacred Grove Victory immediately.
+Step 4 — PLAY TILE (Optional)
+You may play exactly one Rune Tile from your hand by placing it face-up on the discard pile and resolving its effect.
+→ Alternatively, if you hold 3 identical Rune Tiles, you may discard all 3 to trigger a Lair Power instead (§7).
+→ This step is entirely optional. You may pass without playing anything.
+→ You may NOT play more than one single tile per turn (only one tile OR one Lair Power, not both).
+5. Movement System
+5.1  The Rune Die
+Face
+Symbol
+Name
+Effect
+Notes
+1
+1
+Slither
+Move exactly 1 space
+Mandatory.
+2
+2
+Crawl
+Move exactly 2 spaces
+Mandatory.
+3
+3
+Glide
+Move exactly 3 spaces
+Mandatory.
+4
+4
+Strike
+Move exactly 4 spaces
+Mandatory.
+5
+⊕
+Coil
+Move 1, 2, or 3 spaces — player's choice. OR instead of moving, place 1 extra trail marker on any empty adjacent cell.
+Only face that allows choice of distance OR non-move action.
+6
+⚡
+Surge
+Move exactly 5 spaces
+Mandatory; the longest single-turn move.
+📌  Die face colour coding for UI: faces 1–4 neutral (gray background), Coil face amber/orange background, Surge face blue background.
+5.2  Regular Wyrm Movement Rules
+All of the following rules apply on every regular Wyrm move:
+Orthogonal only — a regular Wyrm may move up, down, left, or right. Never diagonally.
+Exact distance — the Wyrm must travel exactly the number of spaces shown on the die (except Coil face). The player may choose any valid path to reach a cell exactly that many steps away.
+No reversal — the Wyrm cannot move into the cell it occupied at the start of that move (the cell it just vacated as the first step of movement). It may visit previously occupied cells from earlier turns if those trail markers have since expired.
+No trail crossing — the Wyrm's path may not pass through OR end on any trail marker cell, regardless of colour. Trails from all players block all movement.
+No friendly stacking — the Wyrm's path may not pass through a cell occupied by another of your own Wyrms. You cannot end movement on a friendly Wyrm.
+No wall crossing — the Wyrm cannot enter a Wall tile cell at any point during movement.
+Capture on landing — if the Wyrm's final cell is occupied by an enemy Wyrm, that Wyrm is immediately captured (§8).
+Path flexibility — the player may choose any valid path of the exact rolled length that respects all constraints. Paths may double back through open cells (not just direct routes), as long as the no-reversal and no-trail rules are observed at every step.
+5.3  Elder Wyrm Movement Rules
+An Elder Wyrm replaces its regular Wyrm token and operates under distinct rules:
+8-directional movement — Elders move orthogonally OR diagonally (all 8 compass directions).
+Free distance choice — Elders move 1, 2, or 3 spaces per turn. The die roll is completely ignored for Elder movement. The player freely selects distance (1, 2, or 3) each turn.
+Trail duration — trails left by an Elder last only 1 round (not 3), making the Elder far more manoeuvrable.
+All other movement rules still apply — no trail crossing, no friendly stacking, no wall crossing, capture on landing.
+5.4  Coiled State (Blocked Wyrm)
+If, at the start of Step 3, a chosen Wyrm has no legal moves available regardless of die roll:
+The Wyrm is declared Coiled.
+It does not move this turn.
+If at least one adjacent cell (orthogonally adjacent) is empty, the player must place 1 of their own trail markers on one such empty adjacent cell (player's choice which one).
+If all adjacent cells are also blocked, no trail marker is placed. The turn ends without movement.
+📌  A player may not deliberately choose to Coil a Wyrm that has valid moves. They must select a different Wyrm that can legally move if any exists. Coil only applies when the chosen Wyrm is genuinely trapped.
+📌  Using the Coil die face (⊕) to place an extra trail marker is NOT the same as the Coiled state above — ⊕ is a voluntary choice; the Coiled state is a forced non-move due to being boxed in.
+5.5  Trail Placement
+After a Wyrm completes its movement (but before checking victory conditions):
+Place a fresh trail marker of your colour on every cell the Wyrm vacated during this move.
+Exception: Do not place trail markers on cells inside your own Den. Den cells never hold trail markers for their owning player.
+Trail markers from all other players CAN exist inside your Den — only your own markers are excluded.
+Fresh markers are at full opacity. Track their age by noting the game round they were placed.
+Trail markers are removed at the end of the third full round after they were placed.
+⚠  Trail removal must be tracked per-marker, not per-Wyrm. If a Wyrm moved 4 spaces, those 4 trail markers were all placed in the same round and expire together. But if the same Wyrm moved again the next turn, that turn's markers expire one round later.
+6. Rune Tile Specification
+6.1  Deck Composition
+The Rune Tile deck contains 40 tiles: 8 element types, 5 copies of each. The deck is shuffled once at the start of the game and reformed from the discard pile when empty. Players draw from the top. There are no draft or secret-selection mechanics — draw order is random.
+6.2  Hand Rules
+Starting hand: 4 tiles.
+Draw 1 tile at the start of each turn (Step 1).
+Draw 2 tiles if on a Power Rune spot (one-time bonus, removes the PRune token).
+Maximum hand size: 5 tiles at any time.
+Play 1 tile per turn maximum (Step 4, optional).
+Discard excess tiles immediately after drawing (player's choice which to discard).
+Played tiles go to the face-up discard pile.
+Discarded-for-size tiles also go to the face-up discard pile.
+Players may look at the discard pile at any time. The deck is opaque.
+6.3  All 8 Rune Tile Types
+Fire — "Flame"  (×5 copies)
+Single-use effect: Remove ALL of your own trail markers from the board immediately. No restrictions on which markers — all of them vanish at once.
+Timing: Played during Step 4 of your turn. Takes effect before your next turn begins.
+Card art direction: Stylised flame: tall teardrop/candle shape, dark orange-red base (#D85A30) grading to warm orange (#F0997B) then golden tip (#EF9F27). No outline. Background: coral-50.
+Strategic use: Best used when you are cornered by your own trail. Also powerful to clear space for a sprint toward the Sacred Grove.
+Water — "Flow"  (×5 copies)
+Single-use effect: Your chosen Wyrm may pass through exactly one trail cell (any colour) during the movement in Step 3 of this turn. The trail marker is NOT removed — the Wyrm simply passes through it. The Wyrm cannot END its movement on a trail cell.
+Timing: Declare before moving. The single trail-pass applies to this turn's move only.
+Card art direction: Raindrop at top centre, three horizontal wave lines below (undulating, not straight), wave amplitude decreasing toward bottom. Blues: #85B7EB, #378ADD, lighter blue. Background: blue-50.
+Strategic use: Emergency escape tile. Most valuable mid-to-late game when the board is congested.
+Earth — "Stone"  (×5 copies)
+Single-use effect: Place one Wall tile on any empty board cell. Wall tiles are permanent — they cannot be removed by any effect except the Earth Lair Power (Fortress). No piece may enter or pass through a Wall tile cell.
+Timing: Played during Step 4. Wall is placed immediately.
+Card art direction: Two overlapping triangles forming a mountain/prism shape. Left triangle slightly lighter green (#97C459), right triangle darker (#3B6D11). Green circle (sun/moon) upper right. Grass stripe at base. Background: green-50.
+Strategic use: Best used to cut off approaching enemy Wyrms or to block a route toward your Den.
+Wind — "Gust"  (×5 copies)
+Single-use effect: Your chosen Wyrm moves +2 additional spaces this turn (added to the die roll result). An Elder Wyrm gains +2 to its free movement allowance (becoming 1–5 spaces instead of 1–3).
+Timing: Declare before moving in Step 3. The bonus applies to this move only.
+Card art direction: Three horizontal curved lines (wind streaks), varying thickness (heaviest middle line). Small dots/particles scattered. Grayscale: #D3D1C7, #888780, #5F5E5A. Background: gray-50.
+Strategic use: Pairs well with Surge die roll (5+2=7) for explosive board traversal.
+Shadow — "Eclipse"  (×5 copies)
+Single-use effect: Swap the board positions of any two of your Wyrms that are currently on the board. Both must be on the board (not in the Hoard or Den). After swapping, each Wyrm is on the cell the other just occupied. No trail markers are placed for this swap.
+Timing: Played during Step 4. Both Wyrms remain wherever they end up — this does not count as movement for trail purposes.
+Card art direction: Dark background (#26215C). Large circle partially eclipsed (crescent shadow), celestial style. Stars scattered. Small glowing centre dot (#AFA9EC). Background: purple-50.
+Strategic use: Instantly reposition a slow Wyrm into a prime location. Combine with a Wyrm already near the Sacred Grove.
+Light — "Radiance"  (×5 copies)
+Single-use effect: Choose one opponent. Look at all cards in their hand. You may view them for as long as you like. You do not rearrange or take any of them. Return them in the same order.
+Timing: Played during Step 4. Information gathered may inform future decisions.
+Card art direction: Central filled circle (#EF9F27) with 8 radiating lines (clock directions), longer straight spikes. Outer glow rings (opacity rings). Background: amber-50.
+Strategic use: Best used to know if an opponent is close to a Lair Power. Lets you intercept their strategy.
+Void — "Erasure"  (×5 copies)
+Single-use effect: Remove up to 3 trail markers belonging to exactly one opponent from the board. You choose which markers to remove (any 3 of their markers, from any cells).
+Timing: Played during Step 4. Markers removed immediately.
+Card art direction: Concentric dashed circles (4 rings) in grey tones. Small dots at cardinal and intercardinal positions. Central filled black dot. Background: gray-50.
+Strategic use: Opens corridors through opponent territory. Can unblock a Wyrm stuck behind enemy trails.
+Serpent — "Coil"  (×5 copies)
+Single-use effect: Your chosen Wyrm's trail duration is extended to 5 rounds (instead of 3). This applies retroactively to all of that Wyrm's existing trail markers on the board — they are all reset to expire in 5 rounds from now. Future trail markers placed by this Wyrm this turn and next turn also last 5 rounds.
+Timing: Played during Step 4. Effect is immediate and retroactive.
+Card art direction: Stylised snake/serpent coiling in a spiral — thick curved line forming roughly 1.5 loops. Purple (#534AB7). Eye: small filled circle with highlight dot. Small forked tongue indicator at head. Background: purple-50.
+Strategic use: Powerful board control. Turn your trail into a persistent fortress. Pairs with Fire Lair Power (Phoenix Molt — which clears everything) as a dramatic reversal.
+7. Lair Powers — Tile Sets
+A Lair Power is triggered during Step 4 when a player holds exactly 3 tiles of the same type in their hand simultaneously. The player discards all 3 tiles to the discard pile and immediately resolves the Lair Power effect. This counts as the Step 4 action — no additional single tile may be played the same turn.
+📌  A Lair Power may be triggered immediately after drawing the third matching tile (i.e., on the same turn you complete the set). You do not need to wait until a future turn.
+⚠  A Lair Power is OPTIONAL. A player who holds 3 matching tiles is not forced to trigger the power — they may wait, hold them, or even discard one voluntarily (e.g., when over the 5-tile hand limit). However, only 5 copies of each tile exist, so waiting risks losing access to the third copy.
+Tiles required
+Lair Power name
+Effect (full detail)
+Fire × 3
+Phoenix Molt
+Remove EVERY trail marker from the entire board. All colours. All cells. Simultaneously. The board returns to its opening state with respect to trails. Wall tiles and Power Rune tokens are not affected.
+Water × 3
+Flood Path
+For your next 3 complete turns, ALL of your Wyrms treat all trail cells as open. They may move through trail cells freely and may end movement on trail cells. Trails are not removed — only your Wyrms ignore them. Track duration: 3 remaining turns, count down at the start of each of your subsequent turns.
+Earth × 3
+Fortress
+Place 3 Wall tiles anywhere on the board (any empty cells, one at a time). The 3 Wall tiles may be placed on any 3 distinct empty cells — they do not need to be adjacent. Each placement follows the normal Wall rules.
+Wind × 3
+Tempest Rush
+This turn, ALL 3 of your Wyrms on the board each make an additional free movement of up to 3 spaces. Resolve each Wyrm's movement one at a time (player chooses order). Die roll is still used for the main movement in Step 3 — this bonus is in addition to it.
+Shadow × 3
+Void Walk
+Teleport any one Wyrm — yours or a Hoarded Wyrm — to any empty cell on the board. A Hoarded Wyrm teleported this way is placed directly on its target cell (skips the Den deploy rule). No trail markers are placed for this teleport movement.
+Light × 3
+Blinding Flash
+Choose one opponent. They must skip their next 2 consecutive turns entirely (no Draw, Roll, Move, or Tile play). Track with a marker. The skipped player does nothing on those turns. If the game ends during the skip period, the effect is simply not completed.
+Void × 3
+Annihilation
+Choose one player (yourself or any opponent). Remove ALL trail markers belonging to that player from the board entirely. This is similar to Phoenix Molt but affects only one colour and does not affect Wall tiles.
+Serpent × 3
+Ancient Wyrm
+Immediately promote any one of your Wyrms to Elder status. The target Wyrm may be anywhere on the board. If it is in your Hoard, promote it there (it becomes an Elder token in your Hoard). If in your Den, promote in place. Normal promotion rules (reaching enemy Den) are bypassed — this is an instant promotion.
+8. Capture & Hoard System
+8.1  Capturing a Wyrm
+A capture occurs when a Wyrm lands on a cell occupied by an opponent's Wyrm (regular or Elder) as the final cell of its movement.
+Remove the captured Wyrm token from the board.
+Place the captured token in the capturing player's Hoard tray.
+The capturing Wyrm now occupies that cell. Trail markers are placed on all vacated cells, as normal.
+Check for Domination Victory immediately: if the capturing player now holds all 3 Wyrms of any single opponent in their Hoard simultaneously, the game ends and they win.
+📌  A Wyrm cannot capture a friendly Wyrm. You cannot land on your own pieces under any circumstances.
+📌  A Wyrm cannot pass through an enemy Wyrm — it can only capture by landing on that exact cell. Mid-path collisions are not captures.
+8.2  The Hoard Tray
+Each player has a personal Hoard tray placed in front of them. It holds any Wyrm tokens captured from opponents. There is no limit to the number of Wyrms in a Hoard.
+Important Hoard tracking rule: For the Domination Victory, only the original 3 Wyrms of a single target player matter. So if Player 1 has captured two of Player 2's Wyrms but Player 2 previously had one of their Wyrms redeployed (returned to Player 2 via their own Hoard mechanism), then the redeployed Wyrm must also be recaptured for Domination.
+8.3  Redeploying Hoarded Wyrms
+On Step 3 of your turn, instead of moving, you may deploy one Wyrm from your Hoard into your own Den:
+Choose one Wyrm token from your Hoard tray (any player's).
+Place it on any empty cell within your own Den (any of the 4 cells in your corner).
+This token is now fully under your control — it is one of your pieces.
+No trail markers are placed when a Wyrm is deployed from the Hoard into a Den.
+The deployed Wyrm is a regular Wyrm, even if it was an Elder when captured. It starts fresh without Elder status.
+📌  There is no maximum on how many Wyrms you can field simultaneously. A player could theoretically control their own 3 Wyrms plus captured pieces — making it theoretically possible to have 6+ pieces on the board at once. This adds pressure toward Domination Victory for a player who has been capturing heavily.
+8.4  Den Blocking Edge Case
+If all 4 cells of a player's Den are occupied (by their own Wyrms, opponent trail markers, or Wall tiles), they cannot deploy from the Hoard that turn. They must move an existing Wyrm instead. If they also have no Wyrms on the board that can legally move, they skip the Move step entirely (rare).
+9. Elder Promotion
+9.1  Promotion Trigger
+Promotion occurs when a regular Wyrm lands on any of the 4 cells belonging to an opponent's Den at the end of a move. The 4 Den cells of each player are defined in §2.1. Any cell within the 2×2 corner zone of an opponent's Den qualifies.
+📌  The player whose Den is invaded is NOT penalised beyond the promotion — their Den remains their safe deploy zone and no pieces are automatically captured by the promotion. Promotion and capture are separate events.
+9.2  Promotion Procedure
+The move lands on an opponent Den cell.
+Remove the regular Wyrm token from the board.
+Place the owner's Elder Wyrm token on that same cell.
+All trail markers placed during this move remain.
+The Wyrm is now an Elder from this point forward for this token's lifespan.
+📌  Only one Elder token per player exists. If a player already has their Elder on the board, their second Wyrm reaching a Den corner cannot be promoted. They must wait until the Elder is captured or until the Ancient Wyrm Lair Power is used (which allows promoting a Wyrm that is NOT currently an Elder via the special Serpent ×3 power).
+9.3  Comparison Table
+Attribute
+Regular Wyrm
+Elder Wyrm
+Move directions
+Orthogonal only (4 dirs)
+Orthogonal + diagonal (8 dirs)
+Movement distance
+Exact die roll (1–5)
+Player's choice: 1, 2, or 3 spaces (no die)
+Trail duration
+3 rounds
+1 round
+Capture ability
+Yes
+Yes
+Can be captured
+Yes
+Yes (returns to Hoard as regular Wyrm)
+Can enter Sacred Grove
+Yes
+Yes
+Starting position after capture
+N/A — goes to opponent Hoard as regular token
+Returns to player's Hoard as regular Wyrm token
+Token appearance
+Solid colour disc
+Same size; golden border ring; ★ symbol
+Movement roll needed
+Yes (Step 2)
+No (still roll, but roll is ignored for Elders)
+10. Win Conditions & Edge Cases
+10.1  Sacred Grove Victory
+Achieved when a player has 2 or more of their Wyrms occupying Sacred Grove cells simultaneously. The Sacred Grove is defined as cells (5,5), (5,6), (6,5), (6,6).
+Checked immediately after any movement (Step 3).
+An Elder Wyrm in the Grove counts equally as a regular Wyrm.
+A Hoarded-then-Teleported Wyrm (via Shadow Lair Power Void Walk) arriving in the Grove counts.
+Wyrms in the Sacred Grove are NOT immune to capture. An opponent can enter the Grove and capture one, removing the victory condition before the winner is declared.
+The game ends IMMEDIATELY upon checking — the player wins even if it is mid-turn.
+The Sacred Grove can hold up to 4 Wyrms simultaneously (4 cells) — multiple players' Wyrms can coexist in the Grove at once.
+10.2  Domination Victory
+Achieved when a player holds all 3 original Wyrms of any single opponent in their Hoard simultaneously.
+Checked immediately after a capture (Step 3).
+A player can achieve Domination over Player 2 even while Player 3 or Player 4 still has Wyrms on the board.
+"All 3 original Wyrms" means the 3 tokens that began the game belonging to that opponent. Redeployed opponent tokens count as that opponent's tokens regardless of current controller.
+⚠  If an opponent's Wyrm is currently under a different player's control (via Hoard deploy), it is not in the original player's Hoard — so it cannot count toward their Domination unless recaptured.
+10.3  Tiebreaker
+If two players achieve a victory condition simultaneously (e.g., via a Lair Power affecting multiple boards states), the player whose action directly caused the condition wins.
+If still tied: the player with the larger hand (more tiles) wins.
+If still tied: the player with more Wyrms on the board wins.
+If still tied: a sudden-death turn is played — first player to capture an opponent Wyrm wins.
+10.4  Exhaustive Edge Cases
+Scenario
+Resolution
+Player moves into Sacred Grove with 1 Wyrm; already has 1 there
+Check: 2 Wyrms now in Grove → Sacred Grove Victory declared.
+Player captures Grove Wyrm reducing opponent below 2 in Grove
+Recheck victory: opponent no longer qualifies → game continues.
+Elder captured in Sacred Grove
+Elder goes to captor's Hoard as regular Wyrm. Grove victory check for opponent may fail.
+Player's only moves box into walls and trails
+Apply Coiled state (§5.4). Must still check if any other Wyrm can move — cannot voluntarily Coil.
+Rune Tile deck runs out mid-draw
+Shuffle discard pile immediately, form new deck, complete draw.
+Player holds 3 matching tiles but deck is empty on their Draw step
+Form new deck from discard before drawing. Then check for Lair Power if desired.
+Flood Path (Water Lair) active — can Wyrm END on a trail cell?
+Yes during Flood Path only. The Wyrm may end its movement on a trail cell. It does not remove that trail marker.
+Wall placed on a Power Rune spot
+Allowed. The Power Rune token is removed (or was already removed). The Wall tile now occupies that cell.
+Can a Wyrm pass through the Sacred Grove without stopping?
+Yes. A Wyrm may pass through Grove cells during movement without triggering victory — only the FINAL position triggers the check.
+Can a player have 0 Wyrms on the board?
+Yes. If all 3 are captured and in opponents' Hoards. They may only play a Tile in Step 4 and must use Deploy if a Wyrm is returned to them via redeployment.
+Void Walk (Shadow Lair) used to place a Wyrm in opponent's Den
+Allowed. The Wyrm is placed on that enemy Den cell, triggering Elder promotion immediately.
+Two players declare Lair Powers on the same turn
+Impossible — only one player acts per turn. Lair Powers are declared in Step 4 of the active player's turn only.
+Elder uses Wind tile (+2 spaces)
+Elder's normal 1–3 range becomes 1–5. Same directional freedom.
+Player has 4 Wyrms on board (from Hoard deploy of captured piece)
+Fully legal. All movement, trail, and capture rules apply equally.
+Can a trail marker be placed on a Sacred Grove cell?
+Yes. Trails can cover Grove cells. A Wyrm with a trail on a Grove cell still cannot enter it (trail blocking applies inside Grove).
+11. Game State & Data Structures
+This section defines the minimal data model for implementing WYRM programmatically. All coordinates are (row, col) with row 0 at top, col 0 at left.
+11.1  Board State
+type CellType = "open" | "den_p1" | "den_p2" | "den_p3" | "den_p4" | "grove" | "power_rune"
+type PlayerId = 1 | 2 | 3 | 4
+interface TrailMarker {
+  owner: PlayerId;          // which player placed this trail
+  placedRound: number;      // game round number when placed
+  expiresAfterRound: number;// placedRound + 3 (or +1 for Elder, +5 for Serpent tile)
+}
+interface Cell {
+  row: number;
+  col: number;
+  type: CellType;
+  trail: TrailMarker | null;  // at most one trail marker per cell at a time
+  hasWall: boolean;            // permanent wall tile present
+  hasPowerRune: boolean;       // power rune token still present
+  occupant: WyrmId | null;     // which Wyrm is here, if any
+}
+type Board = Cell[][];  // 12×12 grid: board[row][col]
+11.2  Wyrm State
+type WyrmStatus = "active" | "in_hoard" | "in_den";
+interface Wyrm {
+  id: WyrmId;              // unique identifier e.g. "p1_w1"
+  originalOwner: PlayerId; // the player who started with this Wyrm
+  currentOwner: PlayerId;  // who controls it right now (changes on capture+redeploy)
+  isElder: boolean;
+  position: { row: number; col: number } | null; // null if in hoard
+  status: WyrmStatus;
+  prevPosition: { row: number; col: number } | null; // for no-reversal rule
+}
+11.3  Player State
+interface PlayerState {
+  id: PlayerId;
+  color: "purple" | "coral" | "teal" | "amber";
+  hand: RuneTileType[];       // max 5 tiles
+  hoard: WyrmId[];            // captured Wyrms held by this player
+  elderTokenAvailable: boolean; // true if Elder token not yet on board
+  floodPathTurnsRemaining: number; // 0 normally; counts down from 3 (Water Lair Power)
+  skipTurnsRemaining: number;      // 0 normally; counts from Blinding Flash
+}
+11.4  Global Game State
+interface GameState {
+  board: Board;
+  players: PlayerState[];          // indices 0–3 map to PlayerId 1–4
+  wyrms: Map<WyrmId, Wyrm>;
+  currentPlayerIndex: number;      // 0–3
+  currentRound: number;            // increments after all players have taken a turn
+  phase: TurnPhase;
+  dieResult: DieResult | null;     // null before roll in current turn
+  deck: RuneTileType[];            // top of array = top of deck
+  discardPile: RuneTileType[];
+  powerRunesRemaining: Set<string>; // "row,col" keys of remaining PRune tokens
+  winner: PlayerId | null;
+  winType: "grove" | "domination" | null;
+}
+11.5  Turn Phase Enum
+type TurnPhase =
+  | "draw"        // Step 1: player draws tile(s)
+  | "roll"        // Step 2: player rolls die
+  | "move"        // Step 3: player selects Wyrm and moves
+  | "play_tile"   // Step 4: player optionally plays a tile
+  | "end_turn"    // clean-up: expire trails, advance turn
+  | "game_over";
+11.6  Rune Tile Type Enum
+type RuneTileType = "fire" | "water" | "earth" | "wind" | "shadow" | "light" | "void" | "serpent";
+type DieResult = 1 | 2 | 3 | 4 | "coil" | "surge";
+// Mapped to move distance: 1→1, 2→2, 3→3, 4→4, surge→5, coil→player choice 1/2/3 or extra trail
+12. Core Algorithms
+12.1  Legal Move Generation
+To compute all legal destination cells for a given Wyrm and move distance:
+function getLegalMoves(wyrmId, distance, gameState): Cell[] {
+  const wyrm = gameState.wyrms.get(wyrmId);
+  const isElder = wyrm.isElder;
+  const dirs = isElder
+    ? [{r:-1,c:0},{r:1,c:0},{r:0,c:-1},{r:0,c:1},
+       {r:-1,c:-1},{r:-1,c:1},{r:1,c:-1},{r:1,c:1}]
+    : [{r:-1,c:0},{r:1,c:0},{r:0,c:-1},{r:0,c:1}];
+  // BFS/DFS: find all cells reachable in exactly `distance` steps
+  // Each step: cell must be empty of walls, trails (unless Flood Path active),
+  // and friendly Wyrms. Previous cell cannot be re-entered (no-reversal).
+  // A cell with an enemy Wyrm is a TERMINAL step (capture) — cannot pass through.
+  // Return: all unique terminal cells reachable at exactly `distance` steps.
+}
+12.2  Trail Expiry Logic
+At the end of each turn (end_turn phase), before advancing to the next player, run:
+function expireTrails(gameState) {
+  for each cell on board:
+    if cell.trail && gameState.currentRound > cell.trail.expiresAfterRound:
+      cell.trail = null;
+}
+📌  Trail expiry is checked after every turn, not just at end of round. A trail placed on round 5 with expiresAfterRound=8 will be removed at the end of the turn that begins round 9.
+12.3  Victory Check
+function checkVictory(gameState): { winner: PlayerId, type } | null {
+  // Sacred Grove Victory:
+  for each player P:
+    const groveCells = [(5,5),(5,6),(6,5),(6,6)]
+    const inGrove = P's wyrms with position in groveCells
+    if inGrove.length >= 2: return { winner: P, type: "grove" }
+  // Domination Victory:
+  for each active player P:
+    for each opponent Q:
+      const qOriginalWyrms = all 3 WyrmIds originally belonging to Q
+      if all 3 are in P.hoard: return { winner: P, type: "domination" }
+  return null;
+}
+12.4  Trail Placement After Move
+function placeTrails(wyrmId, pathCells, gameState) {
+  const wyrm = gameState.wyrms.get(wyrmId);
+  const owner = wyrm.currentOwner;
+  const dur = wyrm.isElder ? 1 : 3; // serpent tile modifier tracked separately
+  for each cell in pathCells except the final destination:
+    if cell is NOT inside owner's own Den:
+      board[cell.row][cell.col].trail = {
+        owner,
+        placedRound: gameState.currentRound,
+        expiresAfterRound: gameState.currentRound + dur
+      };
+}
+13. UI / UX Specification
+13.1  Screen Layout
+Region
+Position
+Contents
+Game board
+Centre, 60–70% of screen width
+12×12 grid with all tokens, trails, overlays
+Player sidebar (all players)
+Right panel or bottom bar (responsive)
+Hand tiles, Hoard contents, Wyrm status indicator per player
+Active player panel
+Highlighted section of sidebar
+Current die result, turn phase indicator, action buttons
+Die display
+Above or beside the board
+Large die face showing current roll; animates on roll
+Rune Tile deck & discard
+Corner of board area
+Deck count, face-down pile; top of discard visible
+Turn phase breadcrumb
+Top bar
+Shows: Draw → Roll → Move → Play Tile with current step highlighted
+Victory overlay
+Full-screen modal on win
+Player colour burst, win type text, replay button
+13.2  Cell Visual States
+State
+Visual treatment
+Open cell (empty)
+#F0EDE4 fill, 0.5px rgba(0,0,0,0.07) grid lines
+Den cell (P1)
+#D8D6F8 fill
+Den cell (P2)
+#F5C4B3 fill
+Den cell (P3)
+#9FE1CB fill
+Den cell (P4)
+#FAC775 fill
+Sacred Grove
+#EF9F27 fill
+Power Rune spot (active)
+Amber diamond icon (◆) centred, #BA7517
+Power Rune spot (used)
+No icon; cell returns to base zone colour
+Wall tile
+#2C2C2A fill, white ✕ symbol centred, 9px
+Trail — P1 Fresh (round 1)
+#AFA9EC at 100% opacity
+Trail — P1 Fading (round 2)
+#AFA9EC at 55% opacity
+Trail — P1 Old (round 3)
+#AFA9EC at 28% opacity
+Trail — P2 Fresh
+#F0997B at 100% opacity
+Trail — P2 Fading
+#F0997B at 55% opacity
+Trail — P2 Old
+#F0997B at 28% opacity
+Trail — P3 Fresh
+#5DCAA5 at 100% opacity
+Trail — P3 Fading
+#5DCAA5 at 55% opacity
+Trail — P3 Old
+#5DCAA5 at 28% opacity
+Trail — P4 Fresh
+#EF9F27 at 100% opacity
+Trail — P4 Fading
+#EF9F27 at 55% opacity
+Trail — P4 Old
+#EF9F27 at 28% opacity
+Legal move target
+Pulsing green ring / highlight — shown during Move phase
+Selected Wyrm
+White ring / glow around token
+Hovered cell
+Subtle brightness increase, cursor: pointer
+13.3  Token Appearance
+Token
+Size
+Shape
+Visual
+Regular Wyrm (P1)
+29×29px
+Circle
+Solid #534AB7 fill, white "W" label 10px
+Regular Wyrm (P2)
+29×29px
+Circle
+Solid #D85A30 fill, white "W" label 10px
+Regular Wyrm (P3)
+29×29px
+Circle
+Solid #1D9E75 fill, white "W" label 10px
+Regular Wyrm (P4)
+29×29px
+Circle
+Solid #BA7517 fill, white "W" label 10px
+Elder Wyrm (P1)
+29×29px
+Circle
+#EEEDFE fill, 2px #534AB7 border, ★ in #412402
+Elder Wyrm (P2)
+29×29px
+Circle
+#FAECE7 fill, 2px #D85A30 border, ★ in #412402
+Elder Wyrm (P3)
+29×29px
+Circle
+#E1F5EE fill, 2px #1D9E75 border, ★ in #412402
+Elder Wyrm (P4)
+29×29px
+Circle
+#FAEEDA fill, 2px #BA7517 border, ★ in #412402
+13.4  Animations
+Event
+Animation
+Wyrm selected
+White ring pops in (scale 0.8→1.0, 150ms ease-out)
+Wyrm moves
+Token slides along path cells sequentially (80ms per cell, ease-in-out)
+Trail placement
+Trail cells fade in at full opacity behind moving Wyrm (simultaneous with move)
+Trail expiry
+Fade out over 400ms at end of the turn they expire
+Capture
+Capturing Wyrm slides in, captured Wyrm shrinks to zero and "flies" to Hoard area (300ms)
+Die roll
+Die face cycles rapidly through random faces for 600ms then lands on result (CSS animation)
+Promotion to Elder
+Token briefly scales to 1.3× with golden ring pulse, then settles as Elder token (500ms)
+Lair Power triggered
+Screen flash in element colour (200ms opacity pulse), then effect animation
+Phoenix Molt
+All trail markers simultaneously fade out (400ms, staggered 10ms per cell for wave effect)
+Power Rune collected
+PRune token spins and shrinks to zero as tiles appear in hand (300ms)
+Victory
+Full-screen colour burst from winner's colour, confetti particle effect optional
+Blinding Flash
+Affected player's sidebar dims, hourglass icon overlaid on their area
+14. Rune Tile Card Visual Design
+14.1  Card Dimensions & Layout
+Card total size
+148px × 186px (or scaled proportionally)
+Art area
+148px × 105px (top portion)
+Body area
+148px × 81px (bottom portion)
+Art background
+Element-specific (see §14.2)
+Body background
+White (#FFFFFF) or var(--color-background-primary)
+Border
+1px solid rgba(0,0,0,0.12); border-radius 10px
+Element label
+8px font, 500 weight, 2px letter-spacing, uppercase, element colour
+Tile name
+15px font, 500 weight, primary text colour
+Effect text
+10px font, secondary text colour, line-height 1.5
+Set-power row
+Separated by 0.5px line; 9px font badge + set power name
+14.2  Per-Element Art Specification
+Tile
+Art BG
+Art description
+Badge fill/text
+Flame (Fire)
+#FAECE7
+Tall teardrop flame: 4 nested pointed shapes. Outermost #D85A30, inner #F0997B, penultimate #EF9F27, innermost #FAC775. No outline. Centred in art area.
+#FAECE7 / #712B13
+Flow (Water)
+#E6F1FB
+Raindrop shape centred top-half. Three horizontal wave lines across bottom two-thirds. Wave colours: #85B7EB, #378ADD, lighter blue. Wave amplitudes decrease toward bottom.
+#E6F1FB / #0C447C
+Stone (Earth)
+#EAF3DE
+Two overlapping triangles (mountain). Left triangle #97C459, right #3B6D11. Circle upper-right #C0DD97 at 70%. Horizontal stripe at base #639922 at 55%.
+#EAF3DE / #173404
+Gust (Wind)
+#F1EFE8
+Three horizontal curved wind-streak lines, varying weight. Small particle circles scattered. Colours: #D3D1C7, #888780, #5F5E5A.
+#F1EFE8 / #2C2C2A
+Eclipse (Shadow)
+#26215C
+Near-black background. Large circle partially eclipsed (crescent visible), colours #7F77DD / #534AB7. Stars: small white dots (#CECBF6) scattered. Central glow dot #AFA9EC.
+#EEEDFE / #26215C
+Radiance (Light)
+#FAEEDA
+Filled circle #EF9F27 with 8 radiating lines (cardinal + diagonal). Three concentric ring outlines around it at low opacity. Background warm amber-50.
+#FAEEDA / #412402
+Erasure (Void)
+#F1EFE8
+4 concentric dashed circles in grey tones, decreasing radius. Small dots at cardinal and intercardinal positions on rings. Solid black dot at centre.
+#F1EFE8 / #2C2C2A
+Coil (Serpent)
+#EEEDFE
+Stylised snake coil: thick curved path making 1.5 loops, colour #534AB7. Filled eye circle with highlight dot. Small forked tongue at head.
+#EEEDFE / #26215C
+15. Player Reference Card
+One reference card is given to each player at game start. It is kept face-up in front of them throughout the game.
+15.1  Card Content (both columns)
+Left column:
+Turn order: 1. Draw  2. Roll  3. Move  4. Play Tile (optional)
+Die faces: 1 Slither / 2 Crawl / 3 Glide / 4 Strike / ⊕ Coil (1–3 or +trail) / ⚡ Surge (5)
+Win conditions: Sacred Grove (2 Wyrms in centre) · Domination (all 3 of one opponent's Wyrms in your Hoard)
+Right column:
+Movement: orthogonal only (4 dirs); exact die roll; no trail crossing; no friendly stacking; no reversal
+Trail: every vacated cell → trail marker; lasts 3 rounds (1 for Elder); shown in 3 opacity levels
+Elder: reach enemy Den corner → replace with Elder token; 8 dirs, 1–3 free movement, trails last 1 round
+Lair Powers: Fire×3=Phoenix Molt · Water×3=Flood Path · Shadow×3=Void Walk · Serpent×3=Ancient Wyrm · Earth×3=Fortress
+16. Complete Colour Reference
+Name
+Hex
+Usage
+Purple-50
+#EEEDFE
+P1 Den fill; Shadow/Serpent tile card background; Elder P1 fill
+Purple-100
+#CECBF6
+UI accents
+Purple-200
+#AFA9EC
+P1 trail marker; Purple mid-tone
+Purple-400
+#7F77DD
+P1 accent
+Purple-600
+#534AB7
+P1 Wyrm token fill; Serpent/Shadow tile border colour; heading accent
+Purple-800
+#3C3489
+Deep purple text
+Purple-900
+#26215C
+Shadow tile background; deepest purple text
+Coral-50
+#FAECE7
+P2 Den fill; Fire tile card background
+Coral-100
+#F5C4B3
+P2 Den visual (slightly darker)
+Coral-200
+#F0997B
+P2 trail marker
+Coral-400
+#D85A30
+P2 Wyrm token fill; Fire tile art colour
+Coral-800
+#712B13
+Coral deep text
+Teal-50
+#E1F5EE
+P3 Den fill
+Teal-100
+#9FE1CB
+P3 Den (slightly darker)
+Teal-200
+#5DCAA5
+P3 trail marker
+Teal-400
+#1D9E75
+P3 Wyrm token fill
+Teal-800
+#085041
+Teal deep text
+Amber-50
+#FAEEDA
+P4 Den fill; Light tile background; Serpent tile background
+Amber-100
+#FAC775
+P4 Den; Elder P4 fill
+Amber-200
+#EF9F27
+Sacred Grove fill; P4 trail marker; Light tile art
+Amber-400
+#BA7517
+P4 Wyrm token fill; Power Rune token; Amber accent
+Amber-900
+#412402
+Amber deepest text
+Gray-50
+#F1EFE8
+Wind/Void tile background; board cell base
+Gray-100
+#D3D1C7
+Light gray
+Gray-200
+#B4B2A9
+Mid gray
+Gray-400
+#888780
+Gray accent
+Gray-600
+#5F5E5A
+Gray dark
+Gray-800
+#444441
+Gray very dark
+Gray-900
+#2C2C2A
+Near black for Wall tiles
+Blue-50
+#E6F1FB
+Water tile background
+Blue-200
+#85B7EB
+Water tile art
+Blue-400
+#378ADD
+Water tile art
+Blue-600
+#185FA5
+Water tile element label
+Green-50
+#EAF3DE
+Earth tile background
+Green-200
+#97C459
+Earth tile art light
+Green-400
+#639922
+Earth tile art mid
+Green-600
+#3B6D11
+Earth tile art dark
+Board background
+#F0EDE4
+Warm off-white for open cells
+White
+#FFFFFF
+Card bodies, text fields
+Black
+#1A1A1A
+Primary text
+Rule line
+#DDDDDD
+Table borders, dividers
+17. 2-Player Variant Rules
+The standard rules apply in full for 2 players with the following adjustments:
+Players use diagonally opposite corners: Player 1 takes (0,0) Den; Player 2 takes (10,10) Den (lower-right).
+The other two corner zones are left uncoloured and are treated as open terrain. A regular Wyrm landing on any cell in an empty corner zone is NOT promoted — promotion only triggers on actively used opponent Den cells.
+Sacred Grove victory requires 2 Wyrms in the Grove as normal.
+Domination victory requires all 3 of the opponent's Wyrms simultaneously.
+Average game time: ~30–45 minutes.
+Recommended removal: Remove 10 Rune Tiles from the deck at random before playing to increase scarcity. This prevents hand-building being too reliable.
+18. 3-Player Variant Rules
+Three players use any three of the four corner Dens (chosen before setup). The unused Den:
+Remains coloured on the board but functions as open terrain (no Wyrms start there).
+A regular Wyrm landing on a cell within the unused Den is NOT promoted.
+All other rules apply in full.
+19. Implementation Checklist
+Use this checklist when implementing WYRM digitally to ensure all systems are accounted for:
+19.1  Board & Rendering
+12×12 grid renders with correct zone colours (§2.1, §16)
+Sacred Grove overlay at (5,5)–(6,6)
+8 Power Rune tokens placed at correct coordinates (§2.3)
+Trail markers render with 3 opacity levels based on age
+Wall tiles render with ✕ symbol
+Cell hover states and selected-Wyrm highlights work
+Legal move target highlights display during Move phase
+19.2  Game Logic
+Turn phase state machine: Draw → Roll → Move → Play Tile → End Turn
+Draw step handles hand limit (5) and deck exhaustion (reshuffle discard)
+Power Rune double-draw implemented and token removed
+Die roll logic: 6 faces with correct probabilities (each face once on a d6)
+Legal move generation: orthogonal/8-dir, exact distance, no trail/wall/friendly/reversal
+Coil (⊕) die face allows variable distance choice (1/2/3) OR extra trail placement
+Elder movement: 8 dirs, 1–3 free, ignores die roll
+Trail placement on all vacated cells except own Den cells
+Trail expiry per-marker by round, checked at end_turn phase
+Capture on landing: move token to Hoard, check Domination Victory
+Sacred Grove check after every move
+Domination check after every capture
+Elder promotion when landing on enemy Den corner cell
+Hoard deploy as alternative to movement in Step 3
+Hand tile play (Step 4): all 8 tile effects implemented
+All 8 Lair Powers implemented
+Flood Path turns-remaining counter (Water Lair Power)
+Blinding Flash skip-turns counter (Light Lair Power)
+Serpent tile retroactively updates existing trail expiry timestamps
+19.3  UI
+Player panels show hand tiles face-up only to their owner (hide from opponents)
+Hoard trays visible to all players
+Die display with roll animation
+Turn phase breadcrumb always visible
+Victory modal with win type and winner colour
+Undo functionality (optional but highly recommended for digital): one step back
+Game log / event feed: records every action in plain text (optional but recommended)
+19.4  Multiplayer Considerations (if applicable)
+All game state is server-authoritative — clients only send actions, server validates and broadcasts.
+Hand tiles are hidden from opponents — server sends only tile count, not types, to non-owning players.
+Reconnection: full game state snapshot is resent on reconnect.
+Turn timer (recommended): 90 seconds per turn for online play; auto-skip on timeout with Coil ⊕ applied as move-1.
+20. Glossary
+Term
+Definition
+Wyrm
+A serpent piece. Each player begins with 3. The basic unit of play.
+Elder Wyrm
+A promoted Wyrm. 8-directional, free 1–3 movement, trails last 1 round. One per player.
+Trail
+A coloured marker placed on a cell when a Wyrm vacates it. Blocks all movement. Lasts 3 rounds (1 for Elder).
+Den
+The 2×2 corner zone belonging to a player. Wyrms start here; redeployments happen here; reaching an enemy Den promotes a Wyrm.
+Sacred Grove
+The 2×2 golden centre zone at (5,5)–(6,6). Objective zone for the race win condition.
+Hoard
+A player's captured Wyrm reserve. Wyrms here can be redeployed.
+Lair Power
+A powerful board effect triggered by holding 3 identical Rune Tiles simultaneously.
+Rune Tile
+A card-like tile drawn each turn. Has an element type and a one-time effect.
+Rune Die
+The custom d6 used in Step 2. Faces: 1, 2, 3, 4, Coil(⊕), Surge(⚡).
+Power Rune Spot
+One of 8 special cells. Landing here grants a bonus draw next turn. One-time use.
+Wall tile
+A permanent impassable cell-blocker placed via the Earth Rune tile or Earth Lair Power.
+Coiled (state)
+A Wyrm with no legal move available. Does not move; may be forced to place an extra trail marker.
+Coil (die face)
+The ⊕ face on the Rune Die. Allows the player to choose movement distance (1–3) or place an extra trail marker instead.
+Flood Path
+The Water Lair Power. Allows a player's Wyrms to ignore trails for 3 turns.
+Phoenix Molt
+The Fire Lair Power. Clears all trails from the board immediately.
+Void Walk
+The Shadow Lair Power. Teleports any one Wyrm to any empty cell.
+Ancient Wyrm
+The Serpent Lair Power. Instantly promotes any Wyrm to Elder.
+Fortress
+The Earth Lair Power. Places 3 Wall tiles immediately.
+Tempest Rush
+The Wind Lair Power. Grants all 3 Wyrms a bonus move of up to 3 spaces.
+Blinding Flash
+The Light Lair Power. Forces one opponent to skip their next 2 turns.
+Annihilation
+The Void Lair Power. Removes all trail markers of one colour from the board.
+Domination Victory
+Win condition: hold all 3 Wyrms of one opponent simultaneously in your Hoard.
+Sacred Grove Victory
+Win condition: have 2+ of your Wyrms in the Sacred Grove simultaneously.
+WYRM
+Complete Game Design Document
+Version 1.0  ·  2026  ·  All specifications subject to playtesting revision
+This document was authored to be self-contained for digital implementation. If anything is unclear, the rule of thumb is: the most restrictive reading that prevents degenerate play is correct.
