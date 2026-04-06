@@ -26,6 +26,8 @@ Implement a minimal real backend in this repo that supports:
 - Server-side room creation for matched players
 - Server-side match record initialization
 - A profile handshake that binds the connected player identity to a socket
+- A stable `clientId` passed during handshake
+- Application-level ping/pong heartbeats for dead-socket detection
 - Client support for both:
   - existing local/private room flows
   - new backend-created matchmaking rooms
@@ -73,6 +75,8 @@ Create a new `server/` directory with focused modules.
 - Tracks connected clients by socket
 - Stores bound profile data after handshake
 - Stores queue timer references and current queue state
+- Stores stable `clientId` per connected socket
+- Tracks heartbeat metadata such as last pong timestamp
 
 `server/matchmakingQueue.ts`
 
@@ -105,6 +109,8 @@ Create a new `server/` directory with focused modules.
 - `queueJoinedAt`
 - `queueTimeoutId`
 - `matchedRoomId`
+- `lastPongAt`
+- `heartbeatMissCount`
 
 #### Matchmaking room
 
@@ -126,10 +132,16 @@ The room snapshot sent to the client should match the existing `AssemblyRoom` / 
 
 #### Client -> Server
 
-`{ type: "hello", profile: { username, level, isGuest? } }`
+`{ type: "hello", clientId, profile: { username, level, isGuest? } }`
 
 - Required before matchmaking actions
 - Binds the authenticated client profile to the socket
+- `clientId` is a UUID generated client-side and reused for the browser session
+
+`{ type: "pong", ts }`
+
+- Sent in response to server heartbeat pings
+- Allows the backend to detect dead sockets and clean up queue entries promptly
 
 `{ type: "queue_join" }`
 
@@ -161,10 +173,20 @@ The room snapshot sent to the client should match the existing `AssemblyRoom` / 
 - Sent to both matched clients
 - The payload matches the requested shape exactly
 
+`{ type: "room_joined", roomId, matchId }`
+
+- Sent after the server has successfully assigned the client to the newly created room
+- Confirms room membership before the assembly client starts `room_watch`
+
 `{ type: "queue_timeout" }`
 
 - Sent after 3 minutes with no match
 - Removes the player from queue first
+
+`{ type: "ping", ts }`
+
+- Sent by the server on a fixed interval
+- Expects a `pong` response from the client
 
 `{ type: "room_snapshot", roomId, room }`
 
@@ -187,10 +209,12 @@ The room snapshot sent to the client should match the existing `AssemblyRoom` / 
    - backend clears both timeout timers
    - backend creates a 2-seat room and `matchId`
    - backend emits `queue_matched` to both sockets
+   - backend emits `room_joined` to both sockets once seat assignment is complete
 7. Each client navigates to `/assembly/:roomId`.
 8. On the assembly route, client sends `room_watch`.
 9. Backend responds with `room_snapshot`.
 10. Existing assembly screen renders the backend-created room.
+11. Throughout the session, server heartbeat `ping` messages expect client `pong` replies.
 
 ### Queue Semantics
 
@@ -209,6 +233,13 @@ If a queued client disconnects:
 - remove them from the queue
 - clear their timeout
 - remove them from the client registry
+
+If a client stops responding to heartbeat:
+
+- treat the socket as dead
+- remove them from the queue if still queued
+- clear their timeout
+- close the socket and remove them from the client registry
 
 If a matched client disconnects after match creation but before gameplay sync is implemented:
 
@@ -230,11 +261,14 @@ Add an online transport layer while preserving current local/private flows.
 
 - Wraps the browser `WebSocket`
 - Handles connect, send, event listeners, and cleanup
+- Sends `hello` with stable `clientId`
+- Replies to server `ping` with `pong`
 
 `src/online/useOnlineSession.ts` or app-level socket state
 
 - Stores:
   - socket connection state
+  - stable `clientId`
   - last queue state
   - backend rooms by `roomId`
   - latest matched `matchId`
@@ -272,6 +306,7 @@ Behavior:
 - on mount, if socket is not connected or handshake is not ready, redirect to `/lobby` with an error
 - searching state is active after `queue_join`
 - on `queue_matched`, navigate to `/assembly/:roomId`
+- on `room_joined`, mark the matchmaking flow as assigned and ready for `room_watch`
 - on `queue_timeout`, replace the searching state with the requested inline message
 - retry sends `queue_join` again and returns to searching state
 
@@ -312,13 +347,16 @@ This keeps the local/private feature set intact while making server-backed rooms
 - Ignore duplicate queue joins from the same socket
 - Ignore `queue_leave` if not queued
 - Reject `room_watch` for unknown room IDs
+- Reject malformed or missing `clientId` in `hello`
 - Guard against sending to closed sockets
+- Close sockets that miss heartbeat responses beyond the configured threshold
 
 ### Client
 
 - If socket is unavailable when entering `/matchmaking`, return to `/lobby`
 - If a room snapshot never arrives after `queue_matched`, show an inline assembly error and allow returning to lobby
 - If the socket closes while searching, show an inline connection error and allow retry/back
+- If the socket reconnects later, reuse the same generated `clientId` for the browser session
 
 ## Testing Strategy
 
@@ -330,6 +368,7 @@ Add focused tests for:
 - timeout removal after 3 minutes
 - explicit `queue_leave`
 - disconnect removal
+- heartbeat timeout removal
 - room creation shape for two matched players
 
 ### Client tests
@@ -339,6 +378,7 @@ Add targeted tests for:
 - route parsing for `/matchmaking`
 - matchmaking subtext rotation helper
 - elapsed timer formatting helper
+- stable `clientId` generation / reuse helper
 - lobby CTA presence and callback behavior
 
 ### Verification commands
@@ -355,11 +395,12 @@ Implement in this order:
 
 1. Backend server scaffold and protocol
 2. Matchmaking queue service with tests
-3. Room store and room snapshot flow
-4. Client socket connection and handshake
-5. `/matchmaking` route and screen
-6. Lobby CTA and app-level room integration
-7. End-to-end verification between two browser sessions
+3. Heartbeat handling and dead-socket cleanup
+4. Room store and room snapshot flow
+5. Client socket connection and handshake
+6. `/matchmaking` route and screen
+7. Lobby CTA and app-level room integration
+8. End-to-end verification between two browser sessions
 
 ## Future Follow-Up
 
