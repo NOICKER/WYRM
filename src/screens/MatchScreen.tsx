@@ -24,6 +24,7 @@ import {
   shouldShowTutorial,
   type TutorialHighlightTarget,
 } from "../components/tutorialOverlayModel.ts";
+import type { BotDifficulty } from "../state/botEngine.ts";
 import { useTooltipState } from "../state/useTooltipState.ts";
 import {
   PLAYER_PALETTE,
@@ -50,6 +51,7 @@ interface MatchScreenProps {
   onAbandonMatch: () => void;
   localMode?: boolean;
   localPlayerNames?: Record<number, string>;
+  localPlayerBots?: Record<number, BotDifficulty>;
 }
 
 interface MatchBoardGridProps {
@@ -240,6 +242,7 @@ export function MatchScreen({
   onAbandonMatch,
   localMode = false,
   localPlayerNames,
+  localPlayerBots,
 }: MatchScreenProps): React.JSX.Element {
   const {
     state,
@@ -329,7 +332,8 @@ export function MatchScreen({
   const currentPlayerColor = getColorValue(playerColors[currentPlayer.id]);
   const activePlayerName = playerNames[currentPlayer.id];
   const isPaused = room.matchStatus === "paused_disconnected";
-  const passOverlayBlocking = localMode && state.phase !== "game_over" && overlayDismissedForPlayer !== currentPlayer.id;
+  const isBotPlayer = localPlayerBots && currentPlayer.id in localPlayerBots;
+  const passOverlayBlocking = localMode && state.phase !== "game_over" && overlayDismissedForPlayer !== currentPlayer.id && !isBotPlayer;
   const disconnectedSeatLabel = getDisconnectedSeatLabel(room.disconnectedSeatName);
   const phaseDisplayLabel = getMatchPhaseDisplayLabel(room.matchStatus, state.phase);
   const pauseCardVisible = shouldShowPauseOverlay(room.matchStatus, pauseOverlayDismissed);
@@ -340,10 +344,11 @@ export function MatchScreen({
   useEffect(() => {
     if (!localMode) return;
     if (state.phase === "game_over") return;
+    if (localPlayerBots && currentPlayer.id in localPlayerBots) return;
     // Only show if the current player hasn't already dismissed for this turn
     if (overlayDismissedForPlayer === currentPlayer.id) return;
     setShowPassOverlay(true);
-  }, [currentPlayer.id, localMode, state.phase]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentPlayer.id, localMode, state.phase, localPlayerBots]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset dismissed tracker whenever phase returns to draw (new turn)
   useEffect(() => {

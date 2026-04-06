@@ -22,6 +22,7 @@ import { ScreenError } from "./components/ScreenError.tsx";
 import { Wordmark } from "./components/Wordmark.tsx";
 import type { PlayerColor, PlayerId } from "./state/types.ts";
 import type { GameState } from "./state/types.ts";
+import type { BotDifficulty } from "./state/botEngine.ts";
 import "./index.css";
 import { useOnlineSession } from "./online/useOnlineSession.ts";
 import {
@@ -168,6 +169,7 @@ function AppShell(): React.JSX.Element {
   const [localPlayerConfig, setLocalPlayerConfig] = useState<{
     initialState: GameState;
     playerNames: Record<number, string>;
+    playerBots: Record<number, BotDifficulty>;
   } | null>(null);
   const [completedMatches, setCompletedMatches] = useState<Record<string, MatchRecord>>(() => ({
     "seed-1": createSeedRecord("seed-1", 1, "Sable Quill", "Sable Quill", "amber", "win"),
@@ -876,8 +878,8 @@ function AppShell(): React.JSX.Element {
       return (
         <LocalSetupScreen
           onNavigate={navigatePath}
-          onStartGame={(initialState, playerNames) => {
-            setLocalPlayerConfig({ initialState, playerNames });
+          onStartGame={(initialState, playerNames, playerBots) => {
+            setLocalPlayerConfig({ initialState, playerNames, playerBots });
             navigate({ name: "local_match" });
           }}
         />
@@ -918,7 +920,7 @@ function AppShell(): React.JSX.Element {
         },
       );
       return (
-        <LocalGameProvider initialState={localPlayerConfig.initialState}>
+        <LocalGameProvider initialState={localPlayerConfig.initialState} playerBots={localPlayerConfig.playerBots}>
           <MatchScreen
             room={localRoom}
             matchId={localMatchId}
@@ -926,6 +928,7 @@ function AppShell(): React.JSX.Element {
             onAbandonMatch={() => navigate({ name: "lobby" })}
             localMode
             localPlayerNames={localPlayerConfig.playerNames}
+            localPlayerBots={localPlayerConfig.playerBots}
           />
         </LocalGameProvider>
       );

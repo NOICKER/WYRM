@@ -53,17 +53,22 @@ export function LobbyScreen({
 }: LobbyScreenProps): React.JSX.Element {
   const [roomCode, setRoomCode] = useState("");
   const canJoin = useMemo(() => roomCode.trim().length > 0, [roomCode]);
+  const mountedWithAutoCreateRef = useRef(autoCreateRoomOnMount);
   const autoCreateTriggeredRef = useRef(false);
 
   useEffect(() => {
-    if (!autoCreateRoomOnMount || autoCreateTriggeredRef.current) {
+    if (!mountedWithAutoCreateRef.current || autoCreateTriggeredRef.current) {
+      return;
+    }
+
+    if (pendingAction) {
       return;
     }
 
     autoCreateTriggeredRef.current = true;
     onConsumeAutoCreateRoom?.();
     onCreateAssembly();
-  }, [autoCreateRoomOnMount, onConsumeAutoCreateRoom, onCreateAssembly]);
+  }, [pendingAction, onConsumeAutoCreateRoom, onCreateAssembly]);
 
   return (
     <main className="shell-page lobby-screen">
