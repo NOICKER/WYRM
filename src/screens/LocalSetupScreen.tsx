@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Wordmark } from "../components/Wordmark.tsx";
 import type { PlayerCount } from "../state/types.ts";
 import { PLAYER_PALETTE } from "../ui/appModel.ts";
-import { createInitialState } from "../state/gameLogic.ts";
+import { createInitialState, PLAYER_ORDER_BY_COUNT } from "../state/gameLogic.ts";
 import type { GameState } from "../state/types.ts";
 import type { BotDifficulty } from "../state/botEngine.ts";
 
@@ -15,21 +15,24 @@ const PLAYER_COLORS = ["purple", "coral", "teal", "amber"] as const;
 
 export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenProps): React.JSX.Element {
   const [playerCount, setPlayerCount] = useState<PlayerCount>(2);
+
+  // Keyed by actual game player ID (from PLAYER_ORDER_BY_COUNT), not slot index
   const [playerNames, setPlayerNames] = useState<Record<number, string>>({
     1: "Player 1",
     2: "Player 2",
     3: "Player 3",
-    4: "Player 4"
+    4: "Player 4",
   });
   const [playerTypes, setPlayerTypes] = useState<Record<number, "human" | BotDifficulty>>({
     1: "human",
     2: "human",
     3: "human",
-    4: "human"
+    4: "human",
   });
 
   const handleStart = () => {
     const initialState = createInitialState(playerCount);
+    // playerTypes is already keyed by real player IDs, so this is correct
     const playerBots = Object.entries(playerTypes).reduce((acc, [id, type]) => {
       if (type !== "human") {
         acc[Number(id)] = type as BotDifficulty;
@@ -39,6 +42,9 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
 
     onStartGame(initialState, playerNames, playerBots);
   };
+
+  // The active slots for this player count use real game player IDs
+  const activePlayerIds = PLAYER_ORDER_BY_COUNT[playerCount];
 
   return (
     <main className="shell-page local-setup-screen">
@@ -60,17 +66,17 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
           <div className="field-group" style={{ marginBottom: "3rem" }}>
             <label className="field">
               <span style={{ fontSize: "0.875rem", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.5rem", display: "block" }}>Player Count</span>
-              <select 
-                value={playerCount} 
+              <select
+                value={playerCount}
                 onChange={(e) => setPlayerCount(Number(e.target.value) as PlayerCount)}
-                style={{ 
-                  padding: "0.75rem", 
-                  backgroundColor: "var(--color-parchment-soft, #fdfbfa)", 
-                  border: "1px solid var(--color-ink-muted, #888)", 
-                  borderRadius: "4px", 
+                style={{
+                  padding: "0.75rem",
+                  backgroundColor: "var(--color-parchment-soft, #fdfbfa)",
+                  border: "1px solid var(--color-ink-muted, #888)",
+                  borderRadius: "4px",
                   fontSize: "1rem",
                   width: "100%",
-                  fontFamily: "var(--font-body)"
+                  fontFamily: "var(--font-body)",
                 }}
               >
                 <option value={2}>2 Players</option>
@@ -81,57 +87,56 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
           </div>
 
           <div className="player-slots" style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-            {Array.from({ length: playerCount }).map((_, i) => {
-              const id = i + 1;
+            {activePlayerIds.map((playerId, i) => {
               const colorName = PLAYER_COLORS[i];
               const colorHex = PLAYER_PALETTE[colorName].base;
 
               return (
-                <div key={id} style={{ display: "flex", alignItems: "flex-start", gap: "1.5rem", backgroundColor: "white", padding: "1.5rem", borderRadius: "8px", border: "1px solid var(--color-ink-muted, #888)" }}>
+                <div key={playerId} style={{ display: "flex", alignItems: "flex-start", gap: "1.5rem", backgroundColor: "white", padding: "1.5rem", borderRadius: "8px", border: "1px solid var(--color-ink-muted, #888)" }}>
                   <div style={{ width: "24px", height: "24px", borderRadius: "50%", backgroundColor: colorHex, flexShrink: 0, marginTop: "0.5rem" }} />
                   <div style={{ flexGrow: 1, display: "flex", gap: "1rem" }}>
                     <label className="field" style={{ flexGrow: 1, margin: 0 }}>
                       <span style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.875rem", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px" }}>
-                        Player {id} <span style={{ color: "var(--color-ink-muted, #888)", fontWeight: "normal" }}>({colorName})</span>
+                        Player {i + 1} <span style={{ color: "var(--color-ink-muted, #888)", fontWeight: "normal" }}>({colorName})</span>
                       </span>
-                      <input 
-                        type="text" 
-                        value={playerNames[id]} 
-                        onChange={(e) => setPlayerNames(prev => ({ ...prev, [id]: e.target.value }))} 
-                        disabled={playerTypes[id] !== "human"}
-                        style={{ 
-                          width: "100%", 
-                          padding: "0.75rem", 
-                          boxSizing: "border-box", 
-                          border: "1px solid var(--color-ink-muted, #888)", 
+                      <input
+                        type="text"
+                        value={playerNames[playerId]}
+                        onChange={(e) => setPlayerNames(prev => ({ ...prev, [playerId]: e.target.value }))}
+                        disabled={playerTypes[playerId] !== "human"}
+                        style={{
+                          width: "100%",
+                          padding: "0.75rem",
+                          boxSizing: "border-box",
+                          border: "1px solid var(--color-ink-muted, #888)",
                           borderRadius: "4px",
                           fontFamily: "var(--font-body)",
                           fontSize: "1rem",
-                          opacity: playerTypes[id] !== "human" ? 0.6 : 1
+                          opacity: playerTypes[playerId] !== "human" ? 0.6 : 1,
                         }}
                       />
                     </label>
                     <label className="field" style={{ width: "140px", margin: 0 }}>
                       <span style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.875rem", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px" }}>Type</span>
-                      <select 
-                        value={playerTypes[id]}
+                      <select
+                        value={playerTypes[playerId]}
                         onChange={(e) => {
                           const type = e.target.value as "human" | BotDifficulty;
-                          setPlayerTypes(prev => ({ ...prev, [id]: type }));
+                          setPlayerTypes(prev => ({ ...prev, [playerId]: type }));
                           if (type !== "human") {
-                            setPlayerNames(prev => ({ ...prev, [id]: `Bot (${type})` }));
+                            setPlayerNames(prev => ({ ...prev, [playerId]: `Bot (${type})` }));
                           } else {
-                            setPlayerNames(prev => ({ ...prev, [id]: `Player ${id}` }));
+                            setPlayerNames(prev => ({ ...prev, [playerId]: `Player ${i + 1}` }));
                           }
                         }}
-                        style={{ 
-                          width: "100%", 
-                          padding: "0.75rem", 
-                          boxSizing: "border-box", 
-                          border: "1px solid var(--color-ink-muted, #888)", 
+                        style={{
+                          width: "100%",
+                          padding: "0.75rem",
+                          boxSizing: "border-box",
+                          border: "1px solid var(--color-ink-muted, #888)",
                           borderRadius: "4px",
                           fontFamily: "var(--font-body)",
-                          fontSize: "1rem"
+                          fontSize: "1rem",
                         }}
                       >
                         <option value="human">Human</option>
@@ -149,9 +154,9 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
           </div>
 
           <div style={{ marginTop: "3rem" }}>
-            <button 
-              type="button" 
-              className="button button--forest" 
+            <button
+              type="button"
+              className="button button--forest"
               style={{ padding: "1rem 2rem", fontSize: "1.25rem" }}
               onClick={handleStart}
             >
