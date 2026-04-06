@@ -1,16 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ConnectionBanner } from "./components/ConnectionBanner.tsx";
 import { RouteCrossfade } from "./components/RouteCrossfade.tsx";
 import { PlayerGuide } from "./components/PlayerGuide.tsx";
 import { ChronicleScreen } from "./screens/ChronicleScreen.tsx";
+import { LandingScreen } from "./screens/LandingScreen.tsx";
 import { AuthScreen } from "./screens/AuthScreen.tsx";
 import { LobbyScreen } from "./screens/LobbyScreen.tsx";
 import { AssemblyLobbyScreen } from "./screens/AssemblyLobbyScreen.tsx";
+import { LocalSetupScreen } from "./screens/LocalSetupScreen.tsx";
 import { MatchScreen } from "./screens/MatchScreen.tsx";
+import { MatchmakingScreen } from "./screens/MatchmakingScreen.tsx";
+import { RoomErrorScreen } from "./screens/RoomErrorScreen.tsx";
 import { ResultsScreen } from "./screens/ResultsScreen.tsx";
+import { SettingsScreen } from "./screens/SettingsScreen.tsx";
 import { GameProvider, useGame } from "./state/useGameState.tsx";
+import { LocalGameProvider } from "./state/useLocalGameState.tsx";
+import { OnlineGameProvider } from "./state/useOnlineGameState.tsx";
+import { LoadingPulse } from "./components/LoadingPulse.tsx";
+import { ScreenError } from "./components/ScreenError.tsx";
+import { Wordmark } from "./components/Wordmark.tsx";
 import type { PlayerColor, PlayerId } from "./state/types.ts";
+import type { GameState } from "./state/types.ts";
 import "./index.css";
+import { useOnlineSession } from "./online/useOnlineSession.ts";
 import {
   AUTH_QUOTES,
   LOBBY_QUOTES,
@@ -25,19 +38,43 @@ import {
   seedHostRoom,
   toPath,
   validateAssemblyCode,
+  createGuestProfile,
   type AppRoute,
   type AssemblyRoom,
   type MatchRecord,
   type UserProfile,
 } from "./ui/appModel.ts";
+import {
+  consumeLobbyIntent,
+  mapRouteErrorToScreenReason,
+  type LobbyIntent,
+} from "./ui/roomRouteErrors.ts";
+import {
+  ANIMATIONS_STORAGE_KEY,
+  SOUND_STORAGE_KEY,
+  loadSettingsPreferences,
+  persistSettingsToggle,
+} from "./ui/settingsPreferences.ts";
 
 interface ActiveMatchSession {
   id: string;
   roomId: string;
   room: AssemblyRoom;
+  source: "local" | "online";
   events: ReturnType<typeof buildChronicleEvent>[];
   seenLogHead: string | null;
   completed: boolean;
+}
+
+function readInitialSettingsPreferences() {
+  try {
+    return loadSettingsPreferences(window.localStorage);
+  } catch {
+    return {
+      animationsEnabled: true,
+      soundEnabled: false,
+    };
+  }
 }
 
 function createSeedRecord(
@@ -67,6 +104,7 @@ function createSeedRecord(
     groveControl: 56 + sessionIndex * 7,
     factionRep: result === "win" ? "Ascendant" : "Watcher",
     sessionIndex,
+    completedAt: Date.UTC(2026, 3, sessionIndex),
     flavorQuote: pickRotating(RESULT_QUOTES, sessionIndex),
     xpEarned: 180 + sessionIndex * 22,
     xpSources: ["Chronicle Logged", result === "win" ? "Sacred Grove Bonus" : "Field Notes"],
@@ -124,11 +162,19 @@ function AppShell(): React.JSX.Element {
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [activeMatch, setActiveMatch] = useState<ActiveMatchSession | null>(null);
   const [sessionCounter, setSessionCounter] = useState(4);
+  const [guestBannerDismissed, setGuestBannerDismissed] = useState(false);
+  const [lobbyIntent, setLobbyIntent] = useState<LobbyIntent>(null);
+  const [preferences, setPreferences] = useState(() => readInitialSettingsPreferences());
+  const [localPlayerConfig, setLocalPlayerConfig] = useState<{
+    initialState: GameState;
+    playerNames: Record<number, string>;
+  } | null>(null);
   const [completedMatches, setCompletedMatches] = useState<Record<string, MatchRecord>>(() => ({
     "seed-1": createSeedRecord("seed-1", 1, "Sable Quill", "Sable Quill", "amber", "win"),
     "seed-2": createSeedRecord("seed-2", 2, "Sable Quill", "Mara Thorne", "purple", "loss"),
     "seed-3": createSeedRecord("seed-3", 3, "Sable Quill", "Sable Quill", "amber", "win"),
   }));
+  const onlineSession = useOnlineSession(profile);
 
   const completedList = useMemo(
     () => Object.values(completedMatches).sort((a, b) => b.sessionIndex - a.sessionIndex),
@@ -136,6 +182,38 @@ function AppShell(): React.JSX.Element {
   );
 
   const activeRoom = activeRoomId ? rooms[activeRoomId] ?? null : null;
+  const activeMatchRoom = activeMatch
+    ? rooms[activeMatch.roomId] ?? onlineSession.onlineRooms[activeMatch.roomId] ?? activeMatch.room
+    : null;
+  const activeMatchState = useMemo(() => {
+    if (!activeMatch || activeMatch.completed) {
+      return null;
+    }
+
+    if (activeMatch.source === "online") {
+      return onlineSession.matchView?.matchId === activeMatch.id ? onlineSession.matchView.state : null;
+    }
+
+    return game.state;
+  }, [activeMatch, game.state, onlineSession.matchView]);
+  const activeAssemblyRouteError = useMemo(() => {
+    if (route.name !== "assembly") {
+      return null;
+    }
+    const routeError = onlineSession.routeError;
+    if (!routeError || !("roomId" in routeError) || routeError.roomId !== route.roomId) {
+      return null;
+    }
+    return routeError;
+  }, [onlineSession.routeError, route]);
+  const activeAssemblyErrorReason = useMemo(
+    () => mapRouteErrorToScreenReason(activeAssemblyRouteError),
+    [activeAssemblyRouteError],
+  );
+  const lobbyIntentState = useMemo(
+    () => (route.name === "lobby" ? consumeLobbyIntent(lobbyIntent) : { shouldAutoCreate: false, nextIntent: lobbyIntent }),
+    [lobbyIntent, route.name],
+  );
 
   const navigate = useCallback((nextRoute: AppRoute, replace = false) => {
     const nextPath = toPath(nextRoute);
@@ -152,6 +230,76 @@ function AppShell(): React.JSX.Element {
     [navigate],
   );
 
+  const navigateBack = useCallback(() => {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    navigate(profile ? { name: "lobby" } : { name: "landing" }, true);
+  }, [navigate, profile]);
+
+  const handleCreateAssembly = useCallback(() => {
+    if (!profile) {
+      return;
+    }
+    setPendingAction("create-room");
+    setError(null);
+    window.setTimeout(() => {
+      const room = seedHostRoom(profile);
+      setRooms((current) => ({ ...current, [room.id]: room }));
+      setActiveRoomId(room.id);
+      setPendingAction(null);
+      navigate({ name: "assembly", roomId: room.id });
+    }, 260);
+  }, [navigate, profile]);
+
+  const handleRoomErrorNavigate = useCallback(
+    (href: string, options?: { autoCreateRoom?: boolean }) => {
+      setLobbyIntent(options?.autoCreateRoom ? { type: "auto_create_room" } : null);
+      onlineSession.clearRouteError();
+      navigatePath(href);
+    },
+    [navigatePath, onlineSession.clearRouteError],
+  );
+
+  const handleConnectionBannerLobby = useCallback(() => {
+    setActiveMatch(null);
+    setActiveRoomId(null);
+    setPendingAction(null);
+    setError(null);
+    setLobbyIntent(null);
+    onlineSession.clearActiveMatchContext();
+    onlineSession.clearError();
+    onlineSession.clearRouteError();
+    navigate({ name: "lobby" });
+  }, [
+    navigate,
+    onlineSession.clearActiveMatchContext,
+    onlineSession.clearError,
+    onlineSession.clearRouteError,
+  ]);
+
+  const handleSaveDisplayName = useCallback((nextUsername: string) => {
+    setProfile((current) => (current ? { ...current, username: nextUsername.trim() } : current));
+  }, []);
+
+  const handleTogglePreference = useCallback(
+    (key: typeof ANIMATIONS_STORAGE_KEY | typeof SOUND_STORAGE_KEY, enabled: boolean) => {
+      setPreferences((current) => ({
+        ...current,
+        animationsEnabled: key === ANIMATIONS_STORAGE_KEY ? enabled : current.animationsEnabled,
+        soundEnabled: key === SOUND_STORAGE_KEY ? enabled : current.soundEnabled,
+      }));
+
+      try {
+        persistSettingsToggle(window.localStorage, key, enabled);
+      } catch {
+        // Ignore storage failures and keep the in-memory preference applied for this session.
+      }
+    },
+    [],
+  );
+
   const beginMatch = useCallback(
     (room: AssemblyRoom) => {
       const occupiedSeats = room.seats.filter((seat) => seat.occupied && seat.playerId);
@@ -162,6 +310,7 @@ function AppShell(): React.JSX.Element {
         id: matchId,
         roomId: room.id,
         room,
+        source: "local",
         events: [],
         seenLogHead: null,
         completed: false,
@@ -178,10 +327,134 @@ function AppShell(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (!onlineSession.roomAssignment?.roomId || route.name !== "matchmaking") {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      navigate({ name: "assembly", roomId: onlineSession.roomAssignment?.roomId ?? "" }, true);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [navigate, onlineSession.roomAssignment?.roomId, route.name]);
+
+  useEffect(() => {
+    if (route.name !== "assembly") {
+      return;
+    }
+    if (rooms[route.roomId] || activeAssemblyErrorReason) {
+      return;
+    }
+    onlineSession.watchRoom(route.roomId);
+    if (
+      onlineSession.roomAssignment?.roomId !== route.roomId
+      || !onlineSession.roomAssignment.joined
+      || onlineSession.matchView?.roomId !== route.roomId
+    ) {
+      onlineSession.joinRoom(route.roomId);
+    }
+  }, [
+    activeAssemblyErrorReason,
+    onlineSession.joinRoom,
+    onlineSession.matchView?.roomId,
+    onlineSession.roomAssignment?.joined,
+    onlineSession.roomAssignment?.roomId,
+    onlineSession.watchRoom,
+    rooms,
+    route,
+  ]);
+
+  useEffect(() => {
+    const matchView = onlineSession.matchView;
+    if (!matchView) {
+      return;
+    }
+
+    const room =
+      rooms[matchView.roomId]
+      ?? onlineSession.onlineRooms[matchView.roomId]
+      ?? (activeMatch?.id === matchView.matchId ? activeMatch.room : null);
+
+    if (!room) {
+      return;
+    }
+
+    setActiveMatch((current) => {
+      if (current && current.source === "local" && !current.completed) {
+        return current;
+      }
+
+      if (current && current.id === matchView.matchId) {
+        return {
+          ...current,
+          roomId: matchView.roomId,
+          room,
+          source: "online",
+          completed: false,
+        };
+      }
+
+      return {
+        id: matchView.matchId,
+        roomId: matchView.roomId,
+        room,
+        source: "online",
+        events: [],
+        seenLogHead: null,
+        completed: false,
+      };
+    });
+  }, [activeMatch?.id, activeMatch?.room, onlineSession.matchView, onlineSession.onlineRooms, rooms]);
+
+  useEffect(() => {
+    const matchView = onlineSession.matchView;
+    if (!matchView) {
+      return;
+    }
+
+    const room = rooms[matchView.roomId] ?? onlineSession.onlineRooms[matchView.roomId] ?? null;
+    if (!room) {
+      return;
+    }
+
+    if (route.name === "assembly" && route.roomId === matchView.roomId) {
+      const timeout = window.setTimeout(() => {
+        navigate({ name: "match", matchId: matchView.matchId }, true);
+      }, 0);
+      return () => window.clearTimeout(timeout);
+    }
+
+    return undefined;
+  }, [navigate, onlineSession.matchView, onlineSession.onlineRooms, rooms, route]);
+
+  useEffect(() => {
+    if (route.name !== "matchmaking") {
+      return;
+    }
+    const hasQueueContext =
+      onlineSession.queueStatus === "searching"
+      || onlineSession.queueStatus === "timed_out"
+      || Boolean(onlineSession.roomAssignment);
+    if (hasQueueContext || onlineSession.connectionState !== "ready") {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setError("Begin matchmaking from the lobby to search for a live opponent.");
+      navigate({ name: "lobby" }, true);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [
+    navigate,
+    onlineSession.connectionState,
+    onlineSession.queueStatus,
+    onlineSession.roomAssignment,
+    route.name,
+  ]);
+
+  useEffect(() => {
     const routeRecord =
       route.name === "results" || route.name === "chronicle" ? completedMatches[route.matchId] : null;
     const redirect = getProtectedRedirect(route, {
       authenticated: Boolean(profile),
+      isGuestSession: Boolean(profile?.isGuest),
       hasActiveMatch: route.name === "match" ? activeMatch?.id === route.matchId && !activeMatch.completed : Boolean(activeMatch && !activeMatch.completed),
       hasCompletedMatch: Boolean(routeRecord),
     });
@@ -193,10 +466,10 @@ function AppShell(): React.JSX.Element {
   }, [activeMatch, completedMatches, navigatePath, profile, route]);
 
   useEffect(() => {
-    if (!activeMatch) {
+    if (!activeMatch || !activeMatchRoom || !activeMatchState) {
       return;
     }
-    const newestLog = game.state.log[0];
+    const newestLog = activeMatchState.log[0];
     if (!newestLog || newestLog === activeMatch.seenLogHead) {
       return;
     }
@@ -210,21 +483,21 @@ function AppShell(): React.JSX.Element {
           seenLogHead: newestLog,
           events: [
             ...current.events,
-            buildChronicleEvent(newestLog, game.state.currentRound, current.room, current.events.length),
+            buildChronicleEvent(newestLog, activeMatchState.currentRound, activeMatchRoom, current.events.length),
           ],
         };
       });
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [activeMatch, game.state.currentRound, game.state.log]);
+  }, [activeMatch, activeMatchRoom, activeMatchState]);
 
   useEffect(() => {
-    if (!activeMatch || activeMatch.completed || !profile || !game.state.winner) {
+    if (!activeMatch || !activeMatchRoom || !activeMatchState || activeMatch.completed || !profile || !activeMatchState.winner) {
       return;
     }
 
     const record = {
-      ...buildMatchRecord(game.state, activeMatch.room, profile, sessionCounter, activeMatch.events),
+      ...buildMatchRecord(activeMatchState, activeMatchRoom, profile, sessionCounter, activeMatch.events),
       id: activeMatch.id,
     };
 
@@ -232,12 +505,23 @@ function AppShell(): React.JSX.Element {
       setCompletedMatches((current) => ({ ...current, [record.id]: record }));
       setSessionCounter((current) => current + 1);
       setActiveMatch((current) => (current ? { ...current, completed: true } : current));
+      if (activeMatch.source === "online") {
+        onlineSession.clearActiveMatchContext();
+      }
       setPendingAction(null);
       navigate({ name: "results", matchId: record.id });
     }, 0);
 
     return () => window.clearTimeout(timeout);
-  }, [activeMatch, game.state, navigate, profile, sessionCounter]);
+  }, [
+    activeMatch,
+    activeMatchRoom,
+    activeMatchState,
+    navigate,
+    onlineSession.clearActiveMatchContext,
+    profile,
+    sessionCounter,
+  ]);
 
   useEffect(() => {
     if (!activeRoom || !profile || pendingAction || !activeRoom.autoBeginWhenReady) {
@@ -278,12 +562,55 @@ function AppShell(): React.JSX.Element {
 
   const authQuote = pickRotating(AUTH_QUOTES, quoteSeed);
   const lobbyQuote = pickRotating(LOBBY_QUOTES, quoteSeed + 1);
+  const handleAbandonMatch = useCallback(() => {
+    const roomId = activeMatch?.roomId ?? null;
+    const activeSource = activeMatch?.source ?? null;
+
+    setActiveMatch((current) =>
+      current
+        ? {
+            ...current,
+            completed: true,
+            room: {
+              ...current.room,
+              matchStatus: "closed",
+            },
+          }
+        : current,
+    );
+
+    if (roomId) {
+      setRooms((current) => {
+        const room = current[roomId];
+        if (!room) {
+          return current;
+        }
+        return {
+          ...current,
+          [roomId]: {
+            ...room,
+            matchStatus: "closed",
+          },
+        };
+      });
+      setActiveRoomId((current) => (current === roomId ? null : current));
+    }
+
+    setPendingAction(null);
+    if (activeSource === "online") {
+      onlineSession.clearActiveMatchContext();
+    }
+    navigate({ name: "lobby" });
+  }, [activeMatch?.roomId, activeMatch?.source, navigate, onlineSession.clearActiveMatchContext]);
 
   const currentRecord =
     route.name === "results" || route.name === "chronicle" ? completedMatches[route.matchId] : null;
 
   const page = (() => {
-    if (!profile || route.name === "auth") {
+    if (!profile || route.name === "landing" || route.name === "auth") {
+      if (route.name === "landing") {
+        return <LandingScreen onNavigate={navigatePath} />;
+      }
       return (
         <AuthScreen
           quote={authQuote}
@@ -299,6 +626,15 @@ function AppShell(): React.JSX.Element {
               navigate({ name: "lobby" }, true);
             }, 280);
           }}
+          onGuestPlay={() => {
+            setPendingAction("guest");
+            setError(null);
+            window.setTimeout(() => {
+              setProfile(createGuestProfile());
+              setPendingAction(null);
+              navigate({ name: "lobby" }, true);
+            }, 320);
+          }}
         />
       );
     }
@@ -312,16 +648,14 @@ function AppShell(): React.JSX.Element {
           pendingAction={pendingAction}
           error={error}
           onNavigate={navigatePath}
-          onCreateAssembly={() => {
-            setPendingAction("create-room");
+          autoCreateRoomOnMount={lobbyIntentState.shouldAutoCreate}
+          onConsumeAutoCreateRoom={() => setLobbyIntent(lobbyIntentState.nextIntent)}
+          onCreateAssembly={handleCreateAssembly}
+          onFindOpponent={() => {
             setError(null);
-            window.setTimeout(() => {
-              const room = seedHostRoom(profile);
-              setRooms((current) => ({ ...current, [room.id]: room }));
-              setActiveRoomId(room.id);
-              setPendingAction(null);
-              navigate({ name: "assembly", roomId: room.id });
-            }, 260);
+            onlineSession.clearError();
+            onlineSession.queueJoin();
+            navigate({ name: "matchmaking" });
           }}
           onJoinAssembly={(code) => {
             setError(null);
@@ -344,30 +678,108 @@ function AppShell(): React.JSX.Element {
       );
     }
 
+    if (route.name === "settings") {
+      return (
+        <SettingsScreen
+          profile={profile}
+          matchHistory={completedList}
+          animationsEnabled={preferences.animationsEnabled}
+          soundEnabled={preferences.soundEnabled}
+          onNavigate={navigatePath}
+          onBack={navigateBack}
+          onSaveDisplayName={handleSaveDisplayName}
+          onToggleAnimations={(enabled) => handleTogglePreference(ANIMATIONS_STORAGE_KEY, enabled)}
+          onToggleSound={(enabled) => handleTogglePreference(SOUND_STORAGE_KEY, enabled)}
+          onReplayChronicle={(matchId) => navigate({ name: "chronicle", matchId })}
+          onClearMatchHistory={() => setCompletedMatches({})}
+        />
+      );
+    }
+
+    if (route.name === "matchmaking") {
+      const status =
+        onlineSession.queueStatus === "timed_out"
+          ? "timed_out"
+          : onlineSession.error
+            ? "offline"
+            : "searching";
+
+      return (
+        <MatchmakingScreen
+          status={status}
+          queueJoinedAt={onlineSession.queueJoinedAt}
+          error={
+            onlineSession.queueStatus === "timed_out"
+              ? "Try again or create a private room."
+              : onlineSession.error
+          }
+          onNavigate={navigatePath}
+          onCancel={() => {
+            onlineSession.queueLeave();
+            navigate({ name: "lobby" });
+          }}
+          onRetry={() => {
+            onlineSession.clearError();
+            onlineSession.queueJoin();
+          }}
+          onBack={() => {
+            onlineSession.queueLeave();
+            navigate({ name: "lobby" });
+          }}
+        />
+      );
+    }
+
     if (route.name === "assembly") {
-      const room = rooms[route.roomId];
+      const localRoom = rooms[route.roomId];
+      const onlineRoom = onlineSession.onlineRooms[route.roomId];
+      const room = localRoom ?? onlineRoom;
+      if (!room && activeAssemblyErrorReason) {
+        return <RoomErrorScreen reason={activeAssemblyErrorReason} onNavigate={handleRoomErrorNavigate} />;
+      }
       if (!room) {
         return (
-          <LobbyScreen
-            profile={profile}
-            quote={lobbyQuote}
-            recentChronicles={completedList}
-            pendingAction={pendingAction}
-            error="That assembly dissolved before you arrived. Return to the lobby and try another sigil."
-            onNavigate={navigatePath}
-            onCreateAssembly={() => {}}
-            onJoinAssembly={() => {}}
-            onReplayChronicle={(matchId) => navigate({ name: "chronicle", matchId })}
-          />
+          <main className="shell-page matchmaking-screen">
+            <aside className="shell-sidebar">
+              <Wordmark href="/lobby" onNavigate={navigatePath} />
+            </aside>
+            <section className="shell-main matchmaking-screen__main">
+              <div className="matchmaking-screen__card">
+                <p className="matchmaking-screen__eyebrow">Assembly Room</p>
+                <h1>Joining the room</h1>
+                <div className="matchmaking-screen__pulse">
+                  <LoadingPulse label="Binding room snapshot" />
+                </div>
+                <p className="matchmaking-screen__subtext">
+                  The relay is fetching the latest assembly state.
+                </p>
+                {onlineSession.error ? <ScreenError message={onlineSession.error} /> : null}
+                <div className="matchmaking-screen__actions">
+                  <button type="button" className="text-link" onClick={() => navigate({ name: "lobby" })}>
+                    Back to lobby
+                  </button>
+                </div>
+              </div>
+            </section>
+          </main>
         );
       }
       return (
         <AssemblyLobbyScreen
           room={room}
-          error={error}
-          pendingAction={pendingAction}
+          error={
+            localRoom
+              ? error
+              : error
+                ?? "This live-matched room is connected to the backend. Shared ready checks and synchronized play arrive in the next phase."
+          }
+          pendingAction={localRoom ? pendingAction : null}
           onNavigate={navigatePath}
           onToggleReady={() => {
+            if (!localRoom) {
+              setError("Live-matched rooms are read-only until synchronized assembly actions land.");
+              return;
+            }
             setRooms((current) => {
               const nextRoom = current[room.id];
               if (!nextRoom) {
@@ -385,6 +797,10 @@ function AppShell(): React.JSX.Element {
             });
           }}
           onSetTimer={(timer) => {
+            if (!localRoom) {
+              setError("Timer changes for live-matched rooms will arrive with synchronized assembly actions.");
+              return;
+            }
             setRooms((current) => ({
               ...current,
               [room.id]: {
@@ -394,6 +810,10 @@ function AppShell(): React.JSX.Element {
             }));
           }}
           onCommence={() => {
+            if (!localRoom) {
+              setError("Live-matched rooms cannot commence yet. Match synchronization is the next phase.");
+              return;
+            }
             setPendingAction("commence");
             setError(null);
             window.setTimeout(() => {
@@ -413,8 +833,102 @@ function AppShell(): React.JSX.Element {
       );
     }
 
+    if (
+      route.name === "match"
+      && activeMatch
+      && activeMatch.id === route.matchId
+      && activeMatch.source === "online"
+      && onlineSession.matchView
+      && onlineSession.matchView.matchId === route.matchId
+    ) {
+      return (
+        <OnlineGameProvider
+          match={onlineSession.matchView}
+          actionError={onlineSession.matchActionError}
+          sendMatchAction={onlineSession.sendMatchAction}
+        >
+          <MatchScreen
+            room={activeMatchRoom ?? activeMatch.room}
+            matchId={activeMatch.id}
+            onNavigate={navigatePath}
+            onAbandonMatch={handleAbandonMatch}
+          />
+        </OnlineGameProvider>
+      );
+    }
+
     if (route.name === "match" && activeMatch && activeMatch.id === route.matchId) {
-      return <MatchScreen room={activeMatch.room} matchId={activeMatch.id} onNavigate={navigatePath} />;
+      return (
+        <MatchScreen
+          room={activeMatchRoom ?? activeMatch.room}
+          matchId={activeMatch.id}
+          onNavigate={navigatePath}
+          onAbandonMatch={handleAbandonMatch}
+        />
+      );
+    }
+
+    if (route.name === "match") {
+      return <RoomErrorScreen reason="match_not_found" onNavigate={handleRoomErrorNavigate} />;
+    }
+
+    if (route.name === "local_setup") {
+      return (
+        <LocalSetupScreen
+          onNavigate={navigatePath}
+          onStartGame={(initialState, playerNames) => {
+            setLocalPlayerConfig({ initialState, playerNames });
+            navigate({ name: "local_match" });
+          }}
+        />
+      );
+    }
+
+    if (route.name === "local_match" && localPlayerConfig) {
+      const localMatchId = "local";
+      // Build a minimal synthetic room just for colour/name lookups in MatchScreen
+      // when localMode is true these won't be used anyway, but MatchScreen still needs a room prop
+      const localRoom = localPlayerConfig.initialState.players.reduce(
+        (acc, player) => {
+          acc.seats.push({
+            id: `seat-${player.id}`,
+            name: localPlayerConfig.playerNames[player.id] ?? `Player ${player.id}`,
+            level: 1,
+            occupied: true,
+            ready: true,
+            host: player.id === 1,
+            currentUser: player.id === 1,
+            playerId: player.id,
+            color: (["purple", "coral", "teal", "amber"] as const)[player.id - 1],
+          });
+          return acc;
+        },
+        {
+          id: "local",
+          code: "local",
+          timer: "∞" as const,
+          boardVariant: "sacred_grove" as const,
+          serverName: "Local",
+          latencyMs: 0,
+          autoBeginWhenReady: false,
+          matchStatus: "active" as const,
+          disconnectedSeatName: null,
+          reconnectDeadlineMinutes: 30,
+          seats: [] as import("./ui/appModel.ts").AssemblySeat[],
+        },
+      );
+      return (
+        <LocalGameProvider initialState={localPlayerConfig.initialState}>
+          <MatchScreen
+            room={localRoom}
+            matchId={localMatchId}
+            onNavigate={navigatePath}
+            onAbandonMatch={() => navigate({ name: "lobby" })}
+            localMode
+            localPlayerNames={localPlayerConfig.playerNames}
+          />
+        </LocalGameProvider>
+      );
     }
 
     if (route.name === "results" && currentRecord) {
@@ -423,7 +937,14 @@ function AppShell(): React.JSX.Element {
           record={currentRecord}
           pendingAction={pendingAction}
           onNavigate={navigatePath}
+          onCheckOpponent={async () => {
+            const room = onlineSession.onlineRooms[currentRecord.roomId] ?? rooms[currentRecord.roomId];
+            if (!room) return false;
+            if (room.matchStatus === "closed" || room.matchStatus === "paused_disconnected") return false;
+            return room.seats.some(s => !s.currentUser && s.occupied);
+          }}
           onForgeAnew={() => {
+            if (!profile) return;
             setPendingAction("forge-anew");
             const room = seedHostRoom(profile);
             const opponent = currentRecord.opponents[0] ?? "Elden Vale";
@@ -449,31 +970,43 @@ function AppShell(): React.JSX.Element {
         <ChronicleScreen
           record={currentRecord}
           onNavigate={navigatePath}
-          onOpenTome={() => setGuideOpen(true)}
         />
       );
     }
 
     return (
       <LobbyScreen
-        profile={profile}
+        profile={profile!}
         quote={lobbyQuote}
         recentChronicles={completedList}
         pendingAction={pendingAction}
         error="That page was not bound into the Tome. You have been returned to the lobby."
         onNavigate={navigatePath}
-        onCreateAssembly={() => navigate({ name: "lobby" })}
+        onCreateAssembly={handleCreateAssembly}
+        onFindOpponent={() => navigate({ name: "lobby" })}
         onJoinAssembly={() => navigate({ name: "lobby" })}
         onReplayChronicle={(matchId) => navigate({ name: "chronicle", matchId })}
       />
     );
   })();
 
+  const showGuestBanner = profile?.isGuest && !guestBannerDismissed && !["auth", "landing"].includes(route.name);
+  const connectionBannerVisible = onlineSession.connectionBannerStatus !== "connected";
+
   return (
-    <>
+    <div
+      className={connectionBannerVisible ? "app-root app-root--connection-offset" : "app-root"}
+      data-wyrm-animations={preferences.animationsEnabled ? "on" : "off"}
+    >
+      <ConnectionBanner
+        status={onlineSession.connectionBannerStatus}
+        attemptCount={onlineSession.reconnectAttemptCount}
+        onRetry={onlineSession.retryReconnect}
+        onGoToLobby={handleConnectionBannerLobby}
+      />
       <button
         className="global-back-btn"
-        onClick={() => window.history.back()}
+        onClick={navigateBack}
         aria-label="Go back"
         title="Go back"
       >
@@ -481,9 +1014,17 @@ function AppShell(): React.JSX.Element {
           <path d="M15 18l-6-6 6-6" />
         </svg>
       </button>
+      {showGuestBanner ? (
+        <div className="guest-banner">
+          <span>Playing as guest — match history will not be saved.</span>
+          <button type="button" onClick={() => setGuestBannerDismissed(true)} aria-label="Dismiss guest notice">
+            ✕
+          </button>
+        </div>
+      ) : null}
       <RouteCrossfade routeKey={toPath(route)}>{page}</RouteCrossfade>
       <PlayerGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
-    </>
+    </div>
   );
 }
 

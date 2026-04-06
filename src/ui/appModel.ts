@@ -2,15 +2,21 @@ import type { GameState, PlayerColor, PlayerId, RuneTileType } from "../state/ty
 import { PLAYER_ORDER_BY_COUNT, PLAYER_NAMES, TILE_HELP, TILE_LABELS } from "../state/gameLogic.ts";
 
 export type AppRoute =
+  | { name: "landing" }
   | { name: "auth" }
   | { name: "lobby" }
+  | { name: "settings" }
+  | { name: "matchmaking" }
   | { name: "assembly"; roomId: string }
   | { name: "match"; matchId: string }
+  | { name: "local_setup" }
+  | { name: "local_match" }
   | { name: "results"; matchId: string }
   | { name: "chronicle"; matchId: string };
 
 export interface ProtectionState {
   authenticated: boolean;
+  isGuestSession: boolean;
   hasActiveMatch: boolean;
   hasCompletedMatch: boolean;
 }
@@ -28,6 +34,20 @@ export interface AuthFormState {
 export interface UserProfile {
   username: string;
   level: number;
+  isGuest?: boolean;
+}
+
+export function createGuestProfile(): UserProfile {
+  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let randomSuffix = "";
+  for (let i = 0; i < 4; i++) {
+    randomSuffix += characters.charAt(Math.floor(Math.random() * characters.length));
+  }
+  return {
+    username: "Guest_" + randomSuffix,
+    level: 1,
+    isGuest: true,
+  };
 }
 
 export interface AssemblySeat extends RoomSeatStatus {
@@ -50,6 +70,12 @@ export interface AssemblyRoom {
   serverName: string;
   latencyMs: number;
   autoBeginWhenReady: boolean;
+  /** "active" = normal play, "paused_disconnected" = opponent DC'd, "closed" = abandoned */
+  matchStatus: "active" | "paused_disconnected" | "closed";
+  /** Name of the player who disconnected, or null when matchStatus is "active" */
+  disconnectedSeatName: string | null;
+  /** How many minutes the room is held open while waiting for reconnect. Default 30. */
+  reconnectDeadlineMinutes: number;
 }
 
 export interface ChronicleEvent {
@@ -84,10 +110,12 @@ export interface MatchRecord {
   groveControl: number;
   factionRep: string;
   sessionIndex: number;
+  completedAt: number;
   flavorQuote: string;
   xpEarned: number;
   xpSources: [string, string];
   events: ChronicleEvent[];
+  opponentStillConnected?: boolean;
 }
 
 export const AUTH_QUOTES = [
@@ -134,11 +162,23 @@ export function parseAppRoute(pathname: string): AppRoute {
   const segments = path.split("/").filter(Boolean);
 
   if (segments.length === 0) {
+    return { name: "landing" };
+  }
+
+  if (segments[0] === "auth") {
     return { name: "auth" };
   }
 
   if (segments[0] === "lobby") {
     return { name: "lobby" };
+  }
+
+  if (segments[0] === "settings") {
+    return { name: "settings" };
+  }
+
+  if (segments[0] === "matchmaking") {
+    return { name: "matchmaking" };
   }
 
   if (segments[0] === "assembly" && segments[1]) {
@@ -157,19 +197,38 @@ export function parseAppRoute(pathname: string): AppRoute {
     return { name: "chronicle", matchId: segments[1] };
   }
 
+  if (segments[0] === "local") {
+    if (segments.length === 1) {
+      return { name: "local_setup" };
+    }
+    if (segments[1] === "match") {
+      return { name: "local_match" };
+    }
+  }
+
   return { name: "lobby" };
 }
 
 export function toPath(route: AppRoute): string {
   switch (route.name) {
-    case "auth":
+    case "landing":
       return "/";
+    case "auth":
+      return "/auth";
     case "lobby":
       return "/lobby";
+    case "settings":
+      return "/settings";
+    case "matchmaking":
+      return "/matchmaking";
     case "assembly":
       return `/assembly/${route.roomId}`;
     case "match":
       return `/match/${route.matchId}`;
+    case "local_setup":
+      return "/local";
+    case "local_match":
+      return "/local/match";
     case "results":
       return `/match/${route.matchId}/results`;
     case "chronicle":
@@ -178,15 +237,15 @@ export function toPath(route: AppRoute): string {
 }
 
 export function getProtectedRedirect(route: AppRoute, protection: ProtectionState): string | null {
-  if (!protection.authenticated && route.name !== "auth") {
+  if (!protection.authenticated && route.name !== "landing" && route.name !== "auth") {
     return "/";
   }
 
-  if (protection.authenticated && route.name === "auth") {
+  if (protection.authenticated && route.name === "landing") {
     return "/lobby";
   }
 
-  if (route.name === "match" && !protection.hasActiveMatch) {
+  if (protection.authenticated && !protection.isGuestSession && route.name === "auth") {
     return "/lobby";
   }
 
@@ -346,6 +405,9 @@ export function seedHostRoom(profile: UserProfile): AssemblyRoom {
     serverName: "Sacred Grove Cluster",
     latencyMs: 38,
     autoBeginWhenReady: false,
+    matchStatus: "active",
+    disconnectedSeatName: null,
+    reconnectDeadlineMinutes: 30,
     seats: [
       createSeat({
         id: "seat-1",
@@ -388,6 +450,9 @@ export function seedGuestRoom(profile: UserProfile, code: string): AssemblyRoom 
     serverName: "West Archivum Relay",
     latencyMs: 54,
     autoBeginWhenReady: true,
+    matchStatus: "active",
+    disconnectedSeatName: null,
+    reconnectDeadlineMinutes: 30,
     seats: [
       createSeat({
         id: "seat-1",
@@ -522,10 +587,12 @@ export function buildMatchRecord(
     groveControl,
     factionRep: winnerId === localSeat.playerId ? "Ascendant" : "Watcher",
     sessionIndex,
+    completedAt: Date.now(),
     flavorQuote: pickRotating(RESULT_QUOTES, sessionIndex),
     xpEarned,
     xpSources: ["Chronicle Logged", winnerId === localSeat.playerId ? "Sacred Grove Bonus" : "Field Notes"],
     events,
+    opponentStillConnected: room.seats.some(seat => !seat.currentUser && seat.occupied),
   };
 }
 

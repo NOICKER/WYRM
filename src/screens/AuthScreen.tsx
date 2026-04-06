@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import { LoadingPulse } from "../components/LoadingPulse.tsx";
 import { ScreenError } from "../components/ScreenError.tsx";
@@ -11,6 +11,7 @@ interface AuthScreenProps {
   error: string | null;
   onSubmit: (form: AuthFormState) => void;
   onOAuth: (provider: "google" | "discord") => void;
+  onGuestPlay: () => void;
 }
 
 export function AuthScreen({
@@ -19,12 +20,34 @@ export function AuthScreen({
   error,
   onSubmit,
   onOAuth,
+  onGuestPlay,
 }: AuthScreenProps): React.JSX.Element {
   const [form, setForm] = useState<AuthFormState>({ username: "", password: "" });
+  const [autoGuest, setAutoGuest] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("guest") === "true") {
+      setAutoGuest(true);
+      onGuestPlay();
+    }
+  }, [onGuestPlay]);
+
   const canSubmit = useMemo(
     () => form.username.trim().length > 1 && form.password.trim().length > 2,
     [form],
   );
+
+  if (autoGuest) {
+    return (
+      <main className="auth-screen">
+        <div className="auth-screen__texture" aria-hidden="true" />
+        <section className="auth-card" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 400 }}>
+          <LoadingPulse label="Starting guest session..." />
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="auth-screen">
@@ -33,7 +56,6 @@ export function AuthScreen({
         <Wordmark
           href="/"
           className="auth-card__wordmark"
-          subtitle="The Archivist's Gateway"
           tagline="The Tome opens only to those who speak their name with conviction."
         />
 
@@ -48,7 +70,7 @@ export function AuthScreen({
           }}
         >
           <label className="field">
-            <span>Archivist Name</span>
+            <span>Username</span>
             <input
               type="text"
               value={form.username}
@@ -60,7 +82,7 @@ export function AuthScreen({
           </label>
 
           <label className="field">
-            <span>Secret Sigil</span>
+            <span>Password</span>
             <input
               type="password"
               value={form.password}
@@ -74,15 +96,25 @@ export function AuthScreen({
           {error ? <ScreenError message={error} /> : null}
 
           <button type="submit" className="button button--forest" disabled={!canSubmit || pendingAction === "auth"}>
-            {pendingAction === "auth" ? <LoadingPulse label="Opening Tome" /> : "Enter the Tome"}
+            {pendingAction === "auth" ? <LoadingPulse label="Opening Tome" /> : "Sign in"}
           </button>
 
           <button type="button" className="text-link">
-            Forgotten Sigil?
+            Forgot password?
+          </button>
+          
+          <button 
+            type="button" 
+            className="text-link" 
+            style={{ marginTop: '0.25rem', alignSelf: 'center' }}
+            disabled={Boolean(pendingAction)}
+            onClick={onGuestPlay}
+          >
+            Play as guest
           </button>
 
           <div className="auth-divider">
-            <span>External Lineage</span>
+            <span>Or continue with</span>
           </div>
 
           <div className="auth-oauth">
@@ -92,7 +124,7 @@ export function AuthScreen({
               disabled={Boolean(pendingAction)}
               onClick={() => onOAuth("google")}
             >
-              {pendingAction === "google" ? <LoadingPulse label="Aetherial" /> : "Aetherial"}
+              {pendingAction === "google" ? <LoadingPulse label="Google" /> : "Google"}
             </button>
             <button
               type="button"
@@ -100,7 +132,7 @@ export function AuthScreen({
               disabled={Boolean(pendingAction)}
               onClick={() => onOAuth("discord")}
             >
-              {pendingAction === "discord" ? <LoadingPulse label="Citadel" /> : "Citadel"}
+              {pendingAction === "discord" ? <LoadingPulse label="Discord" /> : "Discord"}
             </button>
           </div>
         </form>

@@ -141,6 +141,17 @@ export const TILE_HELP: Record<RuneTileType, string> = {
   serpent: "Extend one wyrm's trail to 5 rounds and boost its next turn.",
 };
 
+export const TILE_LAIR_HELP: Record<RuneTileType, string> = {
+  fire: "Phoenix Molt — remove every trail marker from the entire board.",
+  water: "Flood Path — your Wyrms ignore all trails for 3 full turns.",
+  earth: "Fortress — place 3 wall tiles anywhere on the board.",
+  wind: "Tempest Rush — all 3 of your Wyrms each get a free bonus move of up to 3 spaces.",
+  shadow: "Void Walk — teleport any one Wyrm to any empty cell on the board.",
+  light: "Blinding Flash — one opponent skips their next 2 turns.",
+  void: "Annihilation — remove all trail markers of one colour from the board.",
+  serpent: "Ancient Wyrm — instantly promote any Wyrm to Elder status.",
+};
+
 const DECK_COMPOSITION: RuneTileType[] = TILE_ORDER.flatMap((tile) =>
   Array.from({ length: 5 }, () => tile),
 );

@@ -71,7 +71,7 @@ export function AssemblyLobbyScreen({
               ) : (
                 <>
                   <div className="seat-card__hourglass">⌛</div>
-                  <strong>{index === 2 ? "Scribe joining..." : "INVITE SIGIL"}</strong>
+                  <strong>{index === 2 ? "Waiting for player..." : "Invite player"}</strong>
                 </>
               )}
             </button>
@@ -89,21 +89,21 @@ export function AssemblyLobbyScreen({
             }
           }}
         >
-          <span>ASSEMBLY_LOBBY_ID: {room.code}</span>
+          <span>Room code: {room.code}</span>
           <span aria-hidden="true">⧉</span>
-          {copied ? <em>Sigil copied</em> : null}
+          {copied ? <em>Copied</em> : null}
         </button>
       </section>
 
       <aside className="assembly-panel">
-        <h2>Manuscript Settings</h2>
+        <h2>Settings</h2>
 
         <div className="variant-grid">
           <button type="button" className="variant-card variant-card--selected">
             <span className="variant-card__art variant-card__art--grove" />
             <div>
               <strong>The Sacred Grove</strong>
-              <span>Default manuscript</span>
+              <span>Standard</span>
             </div>
             <span className="variant-card__check">✓</span>
           </button>
@@ -111,7 +111,7 @@ export function AssemblyLobbyScreen({
             <span className="variant-card__art variant-card__art--peaks" />
             <div>
               <strong>The Frozen Peaks</strong>
-              <span>Locked · v1</span>
+              <span>Coming soon</span>
             </div>
           </button>
         </div>

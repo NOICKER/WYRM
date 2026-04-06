@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
 
 import {
+  buildMatchRecord,
   canHostCommence,
   getProtectedRedirect,
   parseAppRoute,
+  seedHostRoom,
   validateAssemblyCode,
 } from "../src/ui/appModel.ts";
+import { createInitialState } from "../src/state/gameLogic.ts";
 
 {
-  assert.deepEqual(parseAppRoute("/"), { name: "auth" }, "root should resolve to the auth screen");
+  assert.deepEqual(parseAppRoute("/"), { name: "landing" }, "root should resolve to the landing screen");
+  assert.deepEqual(
+    parseAppRoute("/matchmaking"),
+    { name: "matchmaking" },
+    "matchmaking routes should resolve to the dedicated queue screen",
+  );
   assert.deepEqual(
     parseAppRoute("/assembly/ARC-7-2026"),
     { name: "assembly", roomId: "ARC-7-2026" },
@@ -18,6 +26,11 @@ import {
     parseAppRoute("/match/match-42/chronicle"),
     { name: "chronicle", matchId: "match-42" },
     "chronicle routes should preserve the match id",
+  );
+  assert.deepEqual(
+    parseAppRoute("/settings"),
+    { name: "settings" },
+    "settings routes should resolve to the dedicated settings screen",
   );
 }
 
@@ -29,6 +42,7 @@ import {
   assert.equal(
     getProtectedRedirect(publicLobby, {
       authenticated: false,
+      isGuestSession: false,
       hasActiveMatch: false,
       hasCompletedMatch: false,
     }),
@@ -38,20 +52,32 @@ import {
   assert.equal(
     getProtectedRedirect(protectedMatch, {
       authenticated: true,
+      isGuestSession: false,
       hasActiveMatch: false,
       hasCompletedMatch: false,
     }),
-    "/lobby",
-    "match routes should bounce back to the lobby without an active match",
+    null,
+    "match routes should stay in place so the app can render a match-not-found recovery screen",
   );
   assert.equal(
     getProtectedRedirect(protectedResults, {
       authenticated: true,
+      isGuestSession: false,
       hasActiveMatch: false,
       hasCompletedMatch: true,
     }),
     null,
     "results routes should remain available when a completed match record exists",
+  );
+  assert.equal(
+    getProtectedRedirect(parseAppRoute("/auth"), {
+      authenticated: true,
+      isGuestSession: true,
+      hasActiveMatch: false,
+      hasCompletedMatch: false,
+    }),
+    null,
+    "guest sessions should still be able to open auth so they can create a full account",
   );
 }
 
@@ -91,6 +117,22 @@ import {
     ]),
     true,
     "the race can commence once at least two seats are filled and all occupied seats are ready",
+  );
+}
+
+{
+  const record = buildMatchRecord(
+    createInitialState(2),
+    seedHostRoom({ username: "Sable Quill", level: 7 }),
+    { username: "Sable Quill", level: 7 },
+    4,
+    [],
+  );
+
+  assert.equal(
+    typeof record.completedAt,
+    "number",
+    "completed match records should carry a completion timestamp so settings history can show a date",
   );
 }
 

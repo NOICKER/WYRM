@@ -1,13 +1,32 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import { ContextTooltip } from "../components/ContextTooltip.tsx";
 import { RuneTileCard } from "../components/RuneTileCard.tsx";
 import { ScreenError } from "../components/ScreenError.tsx";
+import { TutorialOverlay, type TutorialBoundingBox } from "../components/TutorialOverlay.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
+import {
+  getContextTooltipTriggers,
+  type ContextTooltipTriggerSnapshot,
+} from "../components/contextTooltipTriggerModel.ts";
+import { PassTheScreenOverlay } from "./PassTheScreenOverlay.tsx";
+import {
+  createReconnectDeadlineTimestamp,
+  getDisconnectedSeatLabel,
+  getMatchPhaseDisplayLabel,
+  getReconnectMinutesRemaining,
+  shouldShowPauseOverlay,
+} from "./matchPauseState.ts";
 import { getControlledActiveWyrms } from "../state/gameLogic.ts";
 import type { Coord, GameState, PlayerColor, PlayerId, RuneTileType, StepOption } from "../state/types.ts";
 import {
+  TUTORIAL_STORAGE_KEY,
+  shouldShowTutorial,
+  type TutorialHighlightTarget,
+} from "../components/tutorialOverlayModel.ts";
+import { useTooltipState } from "../state/useTooltipState.ts";
+import {
   PLAYER_PALETTE,
-  getPhaseLabel,
   getPlayerInitial,
   getTileName,
   mapSeatColorsByPlayerId,
@@ -16,10 +35,21 @@ import {
 } from "../ui/appModel.ts";
 import { useMatchInteractions } from "../ui/useMatchInteractions.ts";
 
+const LOCAL_PLAYER_COLORS: PlayerColor[] = ["purple", "coral", "teal", "amber"];
+const EMPTY_TUTORIAL_BOXES: Record<TutorialHighlightTarget, TutorialBoundingBox | null> = {
+  den: null,
+  hand: null,
+  die: null,
+  board: null,
+};
+
 interface MatchScreenProps {
   room: AssemblyRoom;
   matchId: string;
   onNavigate: (href: string) => void;
+  onAbandonMatch: () => void;
+  localMode?: boolean;
+  localPlayerNames?: Record<number, string>;
 }
 
 interface MatchBoardGridProps {
@@ -31,6 +61,7 @@ interface MatchBoardGridProps {
   actionTargets: Coord[];
   markedTargets: Coord[];
   playerNames: Record<PlayerId, string>;
+  disabled: boolean;
   onCellClick: (coord: Coord) => void;
 }
 
@@ -53,6 +84,63 @@ function getColorValue(color: PlayerColor): string {
   return PLAYER_PALETTE[color].base;
 }
 
+function formatMinuteCount(minutes: number): string {
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+function createTutorialBoundingBox(
+  rect: Pick<TutorialBoundingBox, "top" | "left" | "right" | "bottom">,
+  padding: number,
+): TutorialBoundingBox {
+  const top = Math.max(0, rect.top - padding);
+  const left = Math.max(0, rect.left - padding);
+  const right = Math.min(window.innerWidth, rect.right + padding);
+  const bottom = Math.min(window.innerHeight, rect.bottom + padding);
+
+  return {
+    top,
+    left,
+    right,
+    bottom,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}
+
+function measureNodeTutorialBox(node: Element | null, padding = 0): TutorialBoundingBox | null {
+  if (!node) {
+    return null;
+  }
+
+  return createTutorialBoundingBox(node.getBoundingClientRect(), padding);
+}
+
+function measureCombinedTutorialBox(nodes: Element[], padding = 0): TutorialBoundingBox | null {
+  if (nodes.length === 0) {
+    return null;
+  }
+
+  const combined = nodes.reduce(
+    (current, node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        top: Math.min(current.top, rect.top),
+        left: Math.min(current.left, rect.left),
+        right: Math.max(current.right, rect.right),
+        bottom: Math.max(current.bottom, rect.bottom),
+      };
+    },
+    {
+      top: Number.POSITIVE_INFINITY,
+      left: Number.POSITIVE_INFINITY,
+      right: Number.NEGATIVE_INFINITY,
+      bottom: Number.NEGATIVE_INFINITY,
+    },
+  );
+
+  return createTutorialBoundingBox(combined, padding);
+}
+
 function MatchBoardGrid({
   cellSize,
   state,
@@ -62,6 +150,7 @@ function MatchBoardGrid({
   actionTargets,
   markedTargets,
   playerNames,
+  disabled,
   onCellClick,
 }: MatchBoardGridProps): React.JSX.Element {
   const selectedStart = selectedPath[0];
@@ -94,6 +183,7 @@ function MatchBoardGrid({
             <button
               key={`${cell.row}-${cell.col}`}
               type="button"
+              data-tutorial-den={cell.type.startsWith("den_p") ? cell.type.slice(-1) : undefined}
               className={[
                 "match-board-cell",
                 `match-board-cell--${cell.type}`,
@@ -107,11 +197,12 @@ function MatchBoardGrid({
               ]
                 .filter(Boolean)
                 .join(" ")}
+              disabled={disabled}
               onClick={() => onCellClick(coord)}
             >
               {cell.hasPowerRune ? <span className="match-board-cell__rune">◆</span> : null}
               {cell.hasWall ? <span className="match-board-cell__wall">✕</span> : null}
-              {cell.trail ? (
+              {cell.trail && state.currentRound <= cell.trail.expiresAfterRound ? (
                 <span
                   className={`match-board-cell__trail match-board-cell__trail--${cell.trail.owner}`}
                   style={{ opacity: trailOpacity }}
@@ -142,7 +233,14 @@ function MatchBoardGrid({
   );
 }
 
-export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): React.JSX.Element {
+export function MatchScreen({
+  room,
+  matchId,
+  onNavigate,
+  onAbandonMatch,
+  localMode = false,
+  localPlayerNames,
+}: MatchScreenProps): React.JSX.Element {
   const {
     state,
     currentPlayer,
@@ -181,12 +279,183 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
   } = useMatchInteractions();
 
   const boardRef = useRef<HTMLDivElement | null>(null);
-  const [cellSize] = useState(48);
+  const boardScrollRef = useRef<HTMLDivElement | null>(null);
+  const handTrayRef = useRef<HTMLElement | null>(null);
+  const dieBadgeRef = useRef<HTMLDivElement | null>(null);
+  const helperCardRef = useRef<HTMLElement | null>(null);
+  const coilChoiceRef = useRef<HTMLDivElement | null>(null);
+  const deployAreaRef = useRef<HTMLDivElement | null>(null);
+  const previousTooltipSnapshotRef = useRef<ContextTooltipTriggerSnapshot | null>(null);
+  const previousTooltipEligibilityRef = useRef(false);
+  const { activeTooltipKey, showTooltip, dismissTooltip } = useTooltipState();
+  const [cellSize, setCellSize] = useState(48);
   const [rollingFace, setRollingFace] = useState<string | null>(null);
-  const playerNames = useMemo(() => mapSeatNamesByPlayerId(room), [room]);
-  const playerColors = useMemo(() => mapSeatColorsByPlayerId(room), [room]);
+  const [showPassOverlay, setShowPassOverlay] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+  const [hasResolvedTutorialVisibility, setHasResolvedTutorialVisibility] = useState(localMode);
+  const [tutorialBoxes, setTutorialBoxes] = useState<Record<TutorialHighlightTarget, TutorialBoundingBox | null>>(
+    EMPTY_TUTORIAL_BOXES,
+  );
+  const [overlayDismissedForPlayer, setOverlayDismissedForPlayer] = useState<PlayerId | null>(null);
+  const [pauseOverlayDismissed, setPauseOverlayDismissed] = useState(false);
+  const [reconnectDeadlineAt, setReconnectDeadlineAt] = useState<number | null>(null);
+  const [minutesRemaining, setMinutesRemaining] = useState(room.reconnectDeadlineMinutes);
+
+  // In local mode, derive names and colours from localPlayerNames prop instead of room seats
+  const playerNames = useMemo<Record<PlayerId, string>>(() => {
+    if (localMode && localPlayerNames) {
+      return {
+        1: localPlayerNames[1] ?? "Player 1",
+        2: localPlayerNames[2] ?? "Player 2",
+        3: localPlayerNames[3] ?? "Player 3",
+        4: localPlayerNames[4] ?? "Player 4",
+      };
+    }
+    return mapSeatNamesByPlayerId(room);
+  }, [localMode, localPlayerNames, room]);
+
+  const playerColors = useMemo<Record<PlayerId, PlayerColor>>(() => {
+    if (localMode) {
+      return {
+        1: LOCAL_PLAYER_COLORS[0],
+        2: LOCAL_PLAYER_COLORS[1],
+        3: LOCAL_PLAYER_COLORS[2],
+        4: LOCAL_PLAYER_COLORS[3],
+      };
+    }
+    return mapSeatColorsByPlayerId(room);
+  }, [localMode, room]);
+
   const currentPlayerColor = getColorValue(playerColors[currentPlayer.id]);
   const activePlayerName = playerNames[currentPlayer.id];
+  const isPaused = room.matchStatus === "paused_disconnected";
+  const passOverlayBlocking = localMode && state.phase !== "game_over" && overlayDismissedForPlayer !== currentPlayer.id;
+  const disconnectedSeatLabel = getDisconnectedSeatLabel(room.disconnectedSeatName);
+  const phaseDisplayLabel = getMatchPhaseDisplayLabel(room.matchStatus, state.phase);
+  const pauseCardVisible = shouldShowPauseOverlay(room.matchStatus, pauseOverlayDismissed);
+  const pauseDurationCopy = formatMinuteCount(room.reconnectDeadlineMinutes);
+  const pauseRemainingCopy = formatMinuteCount(minutesRemaining);
+
+  // Show pass-the-screen overlay whenever the active player changes in local mode
+  useEffect(() => {
+    if (!localMode) return;
+    if (state.phase === "game_over") return;
+    // Only show if the current player hasn't already dismissed for this turn
+    if (overlayDismissedForPlayer === currentPlayer.id) return;
+    setShowPassOverlay(true);
+  }, [currentPlayer.id, localMode, state.phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset dismissed tracker whenever phase returns to draw (new turn)
+  useEffect(() => {
+    if (!localMode) return;
+    if (state.phase === "draw") {
+      setOverlayDismissedForPlayer(null);
+    }
+  }, [localMode, state.phase]);
+
+  useEffect(() => {
+    if (!isPaused) {
+      setPauseOverlayDismissed(false);
+      setReconnectDeadlineAt(null);
+      setMinutesRemaining(room.reconnectDeadlineMinutes);
+      return;
+    }
+
+    const deadlineAt = createReconnectDeadlineTimestamp(Date.now(), room.reconnectDeadlineMinutes);
+    setReconnectDeadlineAt(deadlineAt);
+    setMinutesRemaining(getReconnectMinutesRemaining(deadlineAt, Date.now()));
+  }, [isPaused, room.reconnectDeadlineMinutes]);
+
+  useEffect(() => {
+    if (!isPaused || reconnectDeadlineAt == null) {
+      return;
+    }
+
+    const syncCountdown = () => {
+      setMinutesRemaining(getReconnectMinutesRemaining(reconnectDeadlineAt, Date.now()));
+    };
+
+    syncCountdown();
+    const intervalId = window.setInterval(syncCountdown, 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [isPaused, reconnectDeadlineAt]);
+
+  useEffect(() => {
+    if (!isPaused) {
+      return;
+    }
+
+    clearInteraction();
+    setPeekPlayerId(null);
+    setShowPassOverlay(false);
+    // The pause state should always drop any in-progress board selection immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPaused]);
+
+  useEffect(() => {
+    if (localMode) {
+      setShowTutorial(false);
+      setHasResolvedTutorialVisibility(true);
+      return;
+    }
+
+    let hasPlayedFlag: string | null = null;
+    try {
+      hasPlayedFlag = window.localStorage.getItem(TUTORIAL_STORAGE_KEY);
+    } catch {
+      hasPlayedFlag = null;
+    }
+
+    setShowTutorial(shouldShowTutorial({ hasPlayedFlag, localMode }));
+    setHasResolvedTutorialVisibility(true);
+  }, [localMode, matchId]);
+
+  useEffect(() => {
+    if (!showTutorial) {
+      return;
+    }
+
+    const boardScrollNode = boardScrollRef.current;
+
+    const updateTutorialBoxes = () => {
+      const denNodes = boardRef.current
+        ? Array.from(boardRef.current.querySelectorAll<HTMLElement>(`[data-tutorial-den="${currentPlayer.id}"]`))
+        : [];
+      const boardGrid =
+        boardScrollNode?.querySelector<HTMLElement>(".match-board-grid") ?? boardScrollNode;
+
+      setTutorialBoxes({
+        den: measureCombinedTutorialBox(denNodes, 6),
+        hand: measureNodeTutorialBox(handTrayRef.current, 12),
+        die: measureNodeTutorialBox(dieBadgeRef.current, 10),
+        board: measureNodeTutorialBox(boardGrid, 12),
+      });
+    };
+
+    updateTutorialBoxes();
+
+    const resizeObserver = new ResizeObserver(() => updateTutorialBoxes());
+    const observedNodes = [boardRef.current, boardScrollNode, handTrayRef.current, dieBadgeRef.current].filter(
+      (node): node is HTMLElement => node != null,
+    );
+    for (const node of observedNodes) {
+      resizeObserver.observe(node);
+    }
+
+    const handleViewportChange = () => updateTutorialBoxes();
+
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    boardScrollNode?.addEventListener("scroll", handleViewportChange);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+      boardScrollNode?.removeEventListener("scroll", handleViewportChange);
+    };
+  }, [currentPlayer.id, showTutorial]);
+
   const trayTiles = currentPlayer.hand;
   const tileCounts = useMemo(
     () =>
@@ -208,8 +477,98 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
     return tileIndex === -1 ? 2 : tileIndex;
   }, [lairTile, trayTiles]);
 
-  // Fixed cell size to prevent unwanted zooming
-  // The board will use the default 48px initialized in the useState
+  const localViewerPlayerId = useMemo<PlayerId | null>(() => {
+    if (localMode) {
+      return currentPlayer.id;
+    }
+    return room.seats.find((seat) => seat.currentUser)?.playerId ?? null;
+  }, [currentPlayer.id, localMode, room]);
+
+  const canShowContextTooltips =
+    hasResolvedTutorialVisibility
+    && !showTutorial
+    && !passOverlayBlocking
+    && !isPaused
+    && state.phase !== "game_over"
+    && localViewerPlayerId != null
+    && currentPlayer.id === localViewerPlayerId;
+
+  const tooltipSnapshot = useMemo<ContextTooltipTriggerSnapshot>(
+    () => ({
+      state,
+      moveTargets,
+      hoardChoicesCount: hoardChoices.length,
+      lairTile,
+      viewerPlayerId: localViewerPlayerId,
+    }),
+    [state, moveTargets, hoardChoices.length, lairTile, localViewerPlayerId],
+  );
+
+  useEffect(() => {
+    const previousSnapshot = previousTooltipEligibilityRef.current ? previousTooltipSnapshotRef.current : null;
+
+    if (canShowContextTooltips) {
+      const nextKeys = getContextTooltipTriggers({
+        previous: previousSnapshot,
+        current: tooltipSnapshot,
+        isLocalTurn: true,
+      });
+
+      for (const key of nextKeys) {
+        showTooltip(key);
+      }
+    }
+
+    previousTooltipSnapshotRef.current = tooltipSnapshot;
+    previousTooltipEligibilityRef.current = canShowContextTooltips;
+  }, [canShowContextTooltips, showTooltip, tooltipSnapshot]);
+
+  let activeTooltipAnchorRef: React.RefObject<Element | null> = helperCardRef;
+  if (activeTooltipKey === "trail_created" || activeTooltipKey === "sacred_grove_nearby" || activeTooltipKey === "capture_available") {
+    activeTooltipAnchorRef = boardScrollRef;
+  } else if (activeTooltipKey === "lair_power_available") {
+    activeTooltipAnchorRef = handTrayRef;
+  } else if (activeTooltipKey === "coil_choice") {
+    activeTooltipAnchorRef = coilChoiceRef.current ? coilChoiceRef : dieBadgeRef;
+  } else if (activeTooltipKey === "hoard_deploy_available") {
+    activeTooltipAnchorRef = deployAreaRef.current ? deployAreaRef : helperCardRef;
+  }
+
+  useEffect(() => {
+    const container = boardRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        const width = entry.contentRect.width > 0 ? entry.contentRect.width : container.clientWidth;
+        const height = entry.contentRect.height > 0 ? entry.contentRect.height : container.clientHeight;
+        
+        let newSize = Math.floor(Math.min(width, height) / 12);
+        
+        if (state.board[0]) {
+          const cols = state.board[0].length;
+          const rows = state.board.length;
+          const maxByWidth = Math.floor(width / cols);
+          const maxByHeight = Math.floor(height / rows);
+          
+          if (newSize * cols > width) {
+            newSize = maxByHeight;
+            if (newSize * cols > width) {
+                newSize = maxByWidth;
+            }
+          }
+        }
+        
+        if (newSize < 32) newSize = 32;
+        if (newSize > 56) newSize = 56;
+        setCellSize(newSize);
+      }
+    });
+
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [state.board]);
 
   const phaseActionLabel = getPhaseActionLabel(state, canConfirmDiscard);
   const activeOpponents = state.players.filter((player) => player.id !== currentPlayer.id);
@@ -239,45 +598,87 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
 
   return (
     <main className="match-screen">
+      {localMode && showPassOverlay && (
+        <PassTheScreenOverlay
+          playerName={activePlayerName}
+          playerColor={playerColors[currentPlayer.id]}
+          onReady={() => {
+            setOverlayDismissedForPlayer(currentPlayer.id);
+            setShowPassOverlay(false);
+          }}
+        />
+      )}
+      {showTutorial ? (
+        <TutorialOverlay
+          currentPhase={state.phase}
+          selectedWyrmId={selectedWyrmId}
+          highlightBoxes={tutorialBoxes}
+          onComplete={() => setShowTutorial(false)}
+        />
+      ) : null}
+      {canShowContextTooltips && activeTooltipKey ? (
+        <ContextTooltip
+          tooltipKey={activeTooltipKey}
+          anchorRef={activeTooltipAnchorRef}
+          onDismiss={() => dismissTooltip(activeTooltipKey)}
+        />
+      ) : null}
       <div className="match-screen__viewport">
         <header className="match-topbar">
           <Wordmark href="/lobby" onNavigate={onNavigate} compact />
 
-          <div className="match-phase">
-            <span>{getPhaseLabel(state.phase)}</span>
+          <div className={isPaused ? "match-phase match-phase--paused" : "match-phase"}>
+            <span>{phaseDisplayLabel}</span>
           </div>
 
           <div className="match-topbar__right">
-            <div className="die-badge" aria-live="polite">
+            <button
+              type="button"
+              className="button button--outline"
+              style={{
+                minWidth: "2.85rem",
+                minHeight: "2.85rem",
+                padding: "0.5rem",
+                borderRadius: "999px",
+              }}
+              onClick={() => onNavigate("/settings")}
+              aria-label="Open settings"
+              title="Settings"
+            >
+              ⚙
+            </button>
+            <div ref={dieBadgeRef} className="die-badge" aria-live="polite">
               {dieBadgeValue}
             </div>
-            <div className="opponent-trackers">
-              {activeOpponents.map((player) => {
-                const activeWyrms = getControlledActiveWyrms(state, player.id);
-                return (
-                  <article key={player.id} className="opponent-card">
-                    <div>
-                      <strong style={{ color: getColorValue(playerColors[player.id]) }}>{playerNames[player.id]}</strong>
-                      <div className="opponent-card__dots">
-                        {Array.from({ length: 3 }, (_, index) => (
-                          <span
-                            key={index}
-                            className={index < activeWyrms.length ? "opponent-card__dot opponent-card__dot--live" : "opponent-card__dot"}
-                            style={{ backgroundColor: index < activeWyrms.length ? getColorValue(playerColors[player.id]) : undefined }}
-                          />
-                        ))}
+            {!localMode && (
+              <div className="opponent-trackers">
+                {activeOpponents.map((player) => {
+                  const activeWyrms = getControlledActiveWyrms(state, player.id);
+                  return (
+                    <article key={player.id} className="opponent-card">
+                      <div>
+                        <strong style={{ color: getColorValue(playerColors[player.id]) }}>{playerNames[player.id]}</strong>
+                        <div className="opponent-card__dots">
+                          {Array.from({ length: 3 }, (_, index) => (
+                            <span
+                              key={index}
+                              className={index < activeWyrms.length ? "opponent-card__dot opponent-card__dot--live" : "opponent-card__dot"}
+                              style={{ backgroundColor: index < activeWyrms.length ? getColorValue(playerColors[player.id]) : undefined }}
+                            />
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                    <span className="opponent-card__count">{player.hand.length}</span>
-                  </article>
-                );
-              })}
-            </div>
+                      <span className="opponent-card__count">{player.hand.length}</span>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </header>
 
         <section className="match-body">
-          <aside className="helper-card">
+          <aside ref={helperCardRef} className="helper-card">
             <div className="helper-card__header">
               <div>
                 <span>Action Helper</span>
@@ -285,14 +686,18 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
               </div>
             </div>
 
-            <p className="helper-card__copy">{instruction}</p>
+            <p className="helper-card__copy">
+              {isPaused
+                ? `Match paused while we wait for ${disconnectedSeatLabel} to reconnect.`
+                : instruction}
+            </p>
 
             <div className="helper-card__legend">
               <span><i className="legend-dot legend-dot--move" /> Valid Move</span>
               <span><i className="legend-dot legend-dot--capture" /> Lethal Strike</span>
             </div>
 
-            {(state.phase === "draw" || state.phase === "roll" || state.phase === "discard") ? (
+            {!isPaused && (state.phase === "draw" || state.phase === "roll" || state.phase === "discard") ? (
               <button type="button" className="button button--forest button--wide" onClick={handlePrimaryAction}>
                 {phaseActionLabel}
               </button>
@@ -300,20 +705,24 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
 
             {state.error ? <ScreenError message={state.error} /> : null}
 
-            {state.phase === "move" && state.dieResult === "coil" && !state.turnEffects.coilChoice ? (
-              <div className="helper-card__stack">
+            {!isPaused && state.phase === "move" && state.dieResult === "coil" && !state.turnEffects.coilChoice ? (
+              <div
+                ref={coilChoiceRef}
+                className="coil-choice-panel"
+                style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}
+              >
                 {[1, 2, 3].map((choice) => (
                   <button key={choice} type="button" className="button button--outline" onClick={() => onSetCoilChoice(choice as 1 | 2 | 3)}>
                     Move {choice}
                   </button>
                 ))}
-                <button type="button" className="button button--outline" onClick={() => onSetCoilChoice("extra_trail")}>
+                <button type="button" className="button button--forest" style={{ backgroundColor: "var(--color-primary-base)" }} onClick={() => onSetCoilChoice("extra_trail")}>
                   Place Trail
                 </button>
               </div>
             ) : null}
 
-            {state.phase === "move" && state.turnEffects.tempestRushRemaining.length > 0 && !state.turnEffects.mainMoveCompleted ? (
+            {!isPaused && state.phase === "move" && state.turnEffects.tempestRushRemaining.length > 0 && !state.turnEffects.mainMoveCompleted ? (
               <div className="helper-card__stack">
                 <button
                   type="button"
@@ -332,7 +741,7 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
               </div>
             ) : null}
 
-            {tileDraft?.tile === "light" || (tileDraft?.tile === "void" && !tileDraft.opponentId) || tileDraft?.tile === "void" && tileDraft.mode === "lair" ? (
+            {!isPaused && (tileDraft?.tile === "light" || (tileDraft?.tile === "void" && !tileDraft.opponentId) || tileDraft?.tile === "void" && tileDraft.mode === "lair") ? (
               <div className="helper-card__stack">
                 {opponentChoices.map((opponent) => (
                   <button key={opponent.id} type="button" className="button button--outline" onClick={() => chooseOpponent(opponent.id)}>
@@ -342,13 +751,13 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
               </div>
             ) : null}
 
-            {tileDraft?.tile === "void" && tileDraft.mode === "single" && tileDraft.opponentId ? (
+            {!isPaused && tileDraft?.tile === "void" && tileDraft.mode === "single" && tileDraft.opponentId ? (
               <button type="button" className="button button--forest button--wide" onClick={confirmVoidSelection}>
                 Confirm Erasure
               </button>
             ) : null}
 
-            {(tileDraft?.tile === "shadow" && tileDraft.mode === "lair") || (tileDraft?.tile === "serpent" && tileDraft.mode === "lair") ? (
+            {!isPaused && ((tileDraft?.tile === "shadow" && tileDraft.mode === "lair") || (tileDraft?.tile === "serpent" && tileDraft.mode === "lair")) ? (
               <div className="helper-card__stack">
                 {hoardChoices.map((choice) => (
                   <button key={choice.wyrmId} type="button" className="button button--outline" onClick={() => chooseSpecialWyrm(choice.wyrmId)}>
@@ -374,8 +783,8 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
               </div>
             ) : null}
 
-            {hoardChoices.length > 0 && !tileDraft && (state.phase === "move" || state.phase === "play_tile") ? (
-              <div className="helper-card__stack">
+            {!isPaused && hoardChoices.length > 0 && !tileDraft && (state.phase === "move" || state.phase === "play_tile") ? (
+              <div ref={deployAreaRef} className="helper-card__stack">
                 {hoardChoices.map((choice) => (
                   <button
                     key={choice.wyrmId}
@@ -389,13 +798,21 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
               </div>
             ) : null}
 
-            <button type="button" className="button button--ghost button--wide" onClick={clearInteraction}>
+            {!isPaused ? (
+              <button type="button" className="button button--ghost button--wide" onClick={clearInteraction}>
               Clear Selection
-            </button>
+              </button>
+            ) : null}
           </aside>
 
-          <div className="match-board-stage" ref={boardRef}>
-            <div className="match-board-scroll">
+          <div className={isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage"} ref={boardRef}>
+            {isPaused && pauseOverlayDismissed ? (
+              <div className="match-board-pause-banner" role="status" aria-live="polite">
+                <span>{disconnectedSeatLabel} disconnected</span>
+                <span>{pauseRemainingCopy} remaining</span>
+              </div>
+            ) : null}
+            <div ref={boardScrollRef} className="match-board-scroll">
               <MatchBoardGrid
                 cellSize={cellSize}
                 state={state}
@@ -405,53 +822,85 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
                 actionTargets={actionTargets}
                 markedTargets={markedTargets}
                 playerNames={playerNames}
+                disabled={isPaused}
                 onCellClick={handleBoardClick}
               />
             </div>
+            {isPaused && pauseCardVisible ? (
+              <div className="match-board-pause-layer">
+                <article className="match-board-pause-card">
+                  <span className="match-board-pause-card__eyebrow">Reconnect Window</span>
+                  <h2>{disconnectedSeatLabel} disconnected</h2>
+                  <p>
+                    Match is paused. The room will be held for {pauseDurationCopy} while we wait for them to return.
+                  </p>
+                  <div className="match-board-pause-card__timer" aria-live="polite">
+                    <strong>{pauseRemainingCopy}</strong>
+                    <span>remaining</span>
+                  </div>
+                  <div className="match-board-pause-card__actions">
+                    <button
+                      type="button"
+                      className="button button--outline"
+                      onClick={() => setPauseOverlayDismissed(true)}
+                    >
+                      Wait
+                    </button>
+                    <button type="button" className="button button--danger" onClick={onAbandonMatch}>
+                      Abandon match
+                    </button>
+                  </div>
+                </article>
+              </div>
+            ) : null}
           </div>
         </section>
 
-        <footer className="hand-tray">
+        <footer ref={handTrayRef} className="hand-tray">
           <div className="hand-tray__player">
             <h2 style={{ color: currentPlayerColor }}>{activePlayerName}</h2>
             <div className="phase-stepper">
-              {["draw", "roll", "move", "play_tile"].map((phase, index) => {
-                const active = state.phase === phase;
-                const completed =
-                  phase === "draw"
-                    ? state.phase !== "draw"
-                    : phase === "roll"
-                      ? ["move", "play_tile", "game_over"].includes(state.phase)
-                      : phase === "move"
-                        ? state.turnEffects.mainMoveCompleted || state.phase === "play_tile" || state.phase === "game_over"
-                        : state.turnEffects.tileActionUsed || state.phase === "game_over";
-                return (
-                  <span
-                    key={phase}
-                    className={[
-                      "phase-stepper__pill",
-                      active ? "phase-stepper__pill--active" : "",
-                      completed && !active ? "phase-stepper__pill--done" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    style={active ? { backgroundColor: currentPlayerColor } : undefined}
-                  >
-                    {index === 3 ? "Tile" : phase[0].toUpperCase() + phase.slice(1)}
-                  </span>
-                );
-              })}
+              {isPaused ? (
+                <span className="phase-stepper__pill phase-stepper__pill--paused">Paused</span>
+              ) : (
+                ["draw", "roll", "move", "play_tile"].map((phase, index) => {
+                  const active = state.phase === phase;
+                  const completed =
+                    phase === "draw"
+                      ? state.phase !== "draw"
+                      : phase === "roll"
+                        ? ["move", "play_tile", "game_over"].includes(state.phase)
+                        : phase === "move"
+                          ? state.turnEffects.mainMoveCompleted || state.phase === "play_tile" || state.phase === "game_over"
+                          : state.turnEffects.tileActionUsed || state.phase === "game_over";
+                  return (
+                    <span
+                      key={phase}
+                      className={[
+                        "phase-stepper__pill",
+                        active ? "phase-stepper__pill--active" : "",
+                        completed && !active ? "phase-stepper__pill--done" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      style={active ? { backgroundColor: currentPlayerColor } : undefined}
+                    >
+                      {index === 3 ? "Tile" : phase[0].toUpperCase() + phase.slice(1)}
+                    </span>
+                  );
+                })
+              )}
             </div>
           </div>
 
           <div className="hand-tray__cards">
             {trayTiles.map((tile, index) => {
               const copies = tileCounts[tile];
-              const selectedForDiscard = discardSelection.includes(index);
+              const selectedForDiscard = !isPaused && discardSelection.includes(index);
               const cardActive =
                 selectedForDiscard ||
-                Boolean(tileDraft && "tile" in tileDraft && tileDraft.tile === tile) ||
-                Boolean(selectedMove && selectedMove.moveMode === "tempest" && index === 0);
+                (!isPaused && Boolean(tileDraft && "tile" in tileDraft && tileDraft.tile === tile)) ||
+                (!isPaused && Boolean(selectedMove && selectedMove.moveMode === "tempest" && index === 0));
 
               return (
                 <div
@@ -465,15 +914,17 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
                     active={cardActive}
                     elevated={index === lairFocusIndex && Boolean(lairTile)}
                     lairReady={lairTile === tile && copies >= 3}
-                    disabled={!canPlayTiles && state.phase !== "discard"}
+                    disabled={isPaused || (!canPlayTiles && state.phase !== "discard")}
                     onPlay={
-                      state.phase === "discard"
+                      isPaused
+                        ? undefined
+                        : state.phase === "discard"
                         ? () => toggleDiscard(index)
                         : canPlayTiles
                           ? () => startTileDraft(tile, "single")
                           : undefined
                     }
-                    onPlayLair={copies >= 3 && canPlayTiles ? () => startTileDraft(tile, "lair") : undefined}
+                    onPlayLair={!isPaused && copies >= 3 && canPlayTiles ? () => startTileDraft(tile, "lair") : undefined}
                   />
                 </div>
               );
@@ -481,12 +932,16 @@ export function MatchScreen({ room, matchId, onNavigate }: MatchScreenProps): Re
           </div>
 
           <div className="hand-tray__actions">
-            <button type="button" className="button button--forest button--wide" disabled={!canConfirmMove} onClick={performPhasePrimaryAction}>
-              CONFIRM MOVE
-            </button>
-            <button type="button" className="button button--outline button--wide" disabled={!canEndTurn} onClick={onEndTurn}>
-              END TURN
-            </button>
+            {!isPaused ? (
+              <>
+                <button type="button" className="button button--forest button--wide" disabled={!canConfirmMove} onClick={performPhasePrimaryAction}>
+                  CONFIRM MOVE
+                </button>
+                <button type="button" className="button button--outline button--wide" disabled={!canEndTurn} onClick={onEndTurn}>
+                  END TURN
+                </button>
+              </>
+            ) : null}
           </div>
         </footer>
       </div>

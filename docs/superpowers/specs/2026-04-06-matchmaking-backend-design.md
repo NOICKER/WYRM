@@ -193,6 +193,26 @@ The room snapshot sent to the client should match the existing `AssemblyRoom` / 
 - Sent in response to `room_watch`
 - Provides the `AssemblyRoom` snapshot needed to render `/assembly/:roomId`
 
+`{ type: "room_not_found", roomId }`
+
+- Sent when a watched room ID does not exist
+- Allows the client to render a dedicated room-not-found state instead of a generic inline error
+
+`{ type: "room_closed", roomId, reason }`
+
+- Sent when a room existed but can no longer be joined
+- `reason` is structured so the client can distinguish timeout-driven expiry from future close reasons
+
+`{ type: "room_full", roomId, reconnectTokenValid }`
+
+- Sent when a room has no available seats
+- `reconnectTokenValid` tells the client whether the viewer can reclaim a seat or should see the full-room recovery flow
+
+`{ type: "match_not_found", matchId }`
+
+- Sent when the backend cannot resolve a requested match ID
+- Gives the client a typed match recovery state instead of a redirect with no context
+
 `{ type: "error", message }`
 
 - Sent for invalid actions such as queueing before handshake
@@ -272,6 +292,7 @@ Add an online transport layer while preserving current local/private flows.
   - last queue state
   - backend rooms by `roomId`
   - latest matched `matchId`
+  - latest typed route error for room and match recovery surfaces
 - Exposes methods:
   - `connect(profile)`
   - `queueJoin()`
@@ -339,6 +360,54 @@ Recommended shape:
 
 This keeps the local/private feature set intact while making server-backed rooms first-class.
 
+### Route Error UX
+
+Add a dedicated `src/screens/RoomErrorScreen.tsx` for route-driven dead ends.
+
+- `not_found`
+  - heading: `Room not found`
+  - body: `This room code does not exist. Check the code and try again.`
+  - button: `Back to lobby`
+- `expired`
+  - heading: `This room has closed`
+  - body: `The room expired after 30 minutes of inactivity. Create a new room to play.`
+  - button: `Create a new room`
+- `full`
+  - heading: `Room is full`
+  - body: `All seats are taken in this room. Ask for a new link or create your own room.`
+  - button: `Create a new room`
+- `match_not_found`
+  - heading: `Match not found`
+  - body: `This match does not exist or has ended.`
+  - button: `Back to lobby`
+
+Behavior:
+
+- `/assembly/:roomId`
+  - `room_not_found` -> render `RoomErrorScreen("not_found")`
+  - `room_closed` with `reason = "disconnect_timeout"` -> render `RoomErrorScreen("expired")`
+  - `room_full` with `reconnectTokenValid = false` -> render `RoomErrorScreen("full")`
+- `/match/:matchId`
+  - invalid or ended matches render `RoomErrorScreen("match_not_found")`
+
+The screen should sit on the existing deep-green background, use the parchment card treatment, show the WYRM wordmark at the top, and reuse the amber button styling already established in the app.
+
+### One-Shot Lobby Intent
+
+The `Create a new room` recovery action must not use a query string or any persistent browser storage.
+
+Recommended shape:
+
+- keep a transient app-level lobby intent such as `{ type: "auto_create_room" } | null`
+- when the user chooses `Create a new room` from an expired or full room error:
+  - set the lobby intent
+  - navigate to `/lobby`
+- when the lobby screen mounts with that intent present:
+  - trigger the existing create-room flow once
+  - clear the intent immediately
+
+This ensures `/lobby` refreshes do not create duplicate rooms. Only an explicit click or a fresh navigation that sets the in-memory intent should start room creation.
+
 ## Error Handling
 
 ### Backend
@@ -346,7 +415,7 @@ This keeps the local/private feature set intact while making server-backed rooms
 - Reject `queue_join` before `hello`
 - Ignore duplicate queue joins from the same socket
 - Ignore `queue_leave` if not queued
-- Reject `room_watch` for unknown room IDs
+- Reply with `room_not_found` for unknown room IDs
 - Reject malformed or missing `clientId` in `hello`
 - Guard against sending to closed sockets
 - Close sockets that miss heartbeat responses beyond the configured threshold
@@ -354,9 +423,10 @@ This keeps the local/private feature set intact while making server-backed rooms
 ### Client
 
 - If socket is unavailable when entering `/matchmaking`, return to `/lobby`
-- If a room snapshot never arrives after `queue_matched`, show an inline assembly error and allow returning to lobby
+- If a room snapshot never arrives after `queue_matched`, prefer a typed room route error over a generic inline assembly error
 - If the socket closes while searching, show an inline connection error and allow retry/back
 - If the socket reconnects later, reuse the same generated `clientId` for the browser session
+- If the user recovers from an expired or full room, carry the recovery through a one-shot in-memory lobby intent so refreshes do not recreate rooms
 
 ## Testing Strategy
 
@@ -380,6 +450,8 @@ Add targeted tests for:
 - elapsed timer formatting helper
 - stable `clientId` generation / reuse helper
 - lobby CTA presence and callback behavior
+- structured room and match route error mapping
+- one-shot lobby intent consumption
 
 ### Verification commands
 

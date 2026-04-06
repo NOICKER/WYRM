@@ -25,7 +25,7 @@ import {
   actionDeploy,
 } from "./gameEngine.ts";
 
-interface GameContextProps {
+export interface GameContextProps {
   state: GameState;
   startNewGame: (playerCount: PlayerCount) => void;
   draw: () => void;
@@ -39,7 +39,7 @@ interface GameContextProps {
   endTurn: () => void;
 }
 
-const GameContext = createContext<GameContextProps | null>(null);
+export const GameContext = createContext<GameContextProps | null>(null);
 
 export function GameProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [state, setState] = useState<GameState>(() => createInitialState(2));

@@ -6,13 +6,11 @@ import { toRoman, type MatchRecord } from "../ui/appModel.ts";
 interface ChronicleScreenProps {
   record: MatchRecord;
   onNavigate: (href: string) => void;
-  onOpenTome: () => void;
 }
 
 export function ChronicleScreen({
   record,
   onNavigate,
-  onOpenTome,
 }: ChronicleScreenProps): React.JSX.Element {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -47,28 +45,12 @@ export function ChronicleScreen({
     <main className="shell-page chronicle-screen">
       <aside className="shell-sidebar chronicle-sidebar">
         <Wordmark href="/lobby" onNavigate={onNavigate} subtitle="The Tome" tagline="Masterwork Edition" />
-        <button type="button" className="button button--outline" onClick={onOpenTome}>
-          Open Tome
-        </button>
 
         <nav className="sidebar-nav" aria-label="Primary">
           <button type="button" className="sidebar-nav__link">
-            Chronicle
-          </button>
-          <button type="button" className="sidebar-nav__link sidebar-nav__link--disabled">
-            Vault <span className="sidebar-nav__pill">v1</span>
-          </button>
-          <button type="button" className="sidebar-nav__link sidebar-nav__link--disabled">
-            Armory <span className="sidebar-nav__pill">v1</span>
-          </button>
-          <button type="button" className="sidebar-nav__link sidebar-nav__link--disabled">
-            Map <span className="sidebar-nav__pill">v1</span>
+            Replay
           </button>
         </nav>
-
-        <button type="button" className="button button--outline button--disabled" disabled>
-          END TURN
-        </button>
       </aside>
 
       <section className="shell-main chronicle-main">
