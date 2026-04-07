@@ -9,6 +9,7 @@ import {
   getContextTooltipTriggers,
   type ContextTooltipTriggerSnapshot,
 } from "../components/contextTooltipTriggerModel.ts";
+import { PlayerSidebar } from "../components/PlayerSidebar.tsx";
 import { PassTheScreenOverlay } from "./PassTheScreenOverlay.tsx";
 import {
   createReconnectDeadlineTimestamp,
@@ -17,7 +18,6 @@ import {
   getReconnectMinutesRemaining,
   shouldShowPauseOverlay,
 } from "./matchPauseState.ts";
-import { getControlledActiveWyrms } from "../state/gameLogic.ts";
 import type { Coord, GameState, PlayerColor, PlayerId, RuneTileType, StepOption } from "../state/types.ts";
 import {
   TUTORIAL_STORAGE_KEY,
@@ -177,8 +177,8 @@ function MatchBoardGrid({
             (entry) => entry.row === coord.row && entry.col === coord.col,
           );
           const wyrm = cell.occupant ? state.wyrms[cell.occupant] : null;
-          const trailAge = cell.trail ? Math.min(state.currentRound - cell.trail.placedRound, 2) : 0;
-          const trailOpacity = trailAge === 0 ? 0.9 : trailAge === 1 ? 0.5 : 0.2;
+          const trailRoundsRemaining = cell.trail ? cell.trail.expiresAfterRound - state.currentRound : 0;
+          const trailOpacity = trailRoundsRemaining >= 2 ? 0.9 : trailRoundsRemaining === 1 ? 0.5 : 0.2;
           const selectedWyrm = selectedWyrmId && wyrm?.id === selectedWyrmId;
 
           return (
@@ -209,7 +209,7 @@ function MatchBoardGrid({
                   className={`match-board-cell__trail match-board-cell__trail--${cell.trail.owner}`}
                   style={{ opacity: trailOpacity }}
                 >
-                  {trailAge === 2 ? <span className="match-board-cell__trail-dot" /> : null}
+                  {trailRoundsRemaining === 0 ? <span className="match-board-cell__trail-dot" /> : null}
                 </span>
               ) : null}
               {inPath && pathIndex > 0 ? <span className="match-board-cell__index">{pathIndex}</span> : null}
@@ -217,14 +217,15 @@ function MatchBoardGrid({
                 <span
                   className={[
                     "match-board-cell__token",
-                    `match-board-cell__token--${wyrm.currentOwner}`,
+                    `match-board-cell__token--${wyrm.originalOwner}`,
+                    wyrm.currentOwner !== wyrm.originalOwner ? `match-board-cell__token-control--${wyrm.currentOwner}` : "",
                     wyrm.isElder ? "match-board-cell__token--elder" : "",
                     selectedWyrm ? "match-board-cell__token--selected" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
                 >
-                  {wyrm.isElder ? "★" : getPlayerInitial(playerNames[wyrm.currentOwner])}
+                  {wyrm.isElder ? "★" : getPlayerInitial(playerNames[wyrm.originalOwner])}
                 </span>
               ) : null}
             </button>
@@ -303,6 +304,7 @@ export function MatchScreen({
   const [pauseOverlayDismissed, setPauseOverlayDismissed] = useState(false);
   const [reconnectDeadlineAt, setReconnectDeadlineAt] = useState<number | null>(null);
   const [minutesRemaining, setMinutesRemaining] = useState(room.reconnectDeadlineMinutes);
+  const [showDiscardModal, setShowDiscardModal] = useState(false);
 
   // In local mode, derive names and colours from localPlayerNames prop instead of room seats
   const playerNames = useMemo<Record<PlayerId, string>>(() => {
@@ -576,7 +578,6 @@ export function MatchScreen({
   }, [state.board]);
 
   const phaseActionLabel = getPhaseActionLabel(state, canConfirmDiscard);
-  const activeOpponents = state.players.filter((player) => player.id !== currentPlayer.id);
   const visiblePeekHand = peekPlayerId
     ? state.players.find((player) => player.id === peekPlayerId)?.hand ?? []
     : [];
@@ -655,30 +656,6 @@ export function MatchScreen({
             <div ref={dieBadgeRef} className="die-badge" aria-live="polite">
               {dieBadgeValue}
             </div>
-            {!localMode && (
-              <div className="opponent-trackers">
-                {activeOpponents.map((player) => {
-                  const activeWyrms = getControlledActiveWyrms(state, player.id);
-                  return (
-                    <article key={player.id} className="opponent-card">
-                      <div>
-                        <strong style={{ color: getColorValue(playerColors[player.id]) }}>{playerNames[player.id]}</strong>
-                        <div className="opponent-card__dots">
-                          {Array.from({ length: 3 }, (_, index) => (
-                            <span
-                              key={index}
-                              className={index < activeWyrms.length ? "opponent-card__dot opponent-card__dot--live" : "opponent-card__dot"}
-                              style={{ backgroundColor: index < activeWyrms.length ? getColorValue(playerColors[player.id]) : undefined }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                      <span className="opponent-card__count">{player.hand.length}</span>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
           </div>
         </header>
 
@@ -775,7 +752,7 @@ export function MatchScreen({
             {visiblePeekHand.length > 0 ? (
               <div className="helper-card__peek">
                 <div className="helper-card__peek-header">
-                  <strong>Revealed Hand</strong>
+                  <strong>Revealed Hand{peekPlayerId ? `: ${playerNames[peekPlayerId]}` : ""}</strong>
                   <button type="button" className="text-link" onClick={() => setPeekPlayerId(null)}>
                     Close
                   </button>
@@ -789,17 +766,36 @@ export function MatchScreen({
             ) : null}
 
             {!isPaused && hoardChoices.length > 0 && !tileDraft && (state.phase === "move" || state.phase === "play_tile") ? (
-              <div ref={deployAreaRef} className="helper-card__stack">
-                {hoardChoices.map((choice) => (
-                  <button
-                    key={choice.wyrmId}
-                    type="button"
-                    className={deployWyrmId === choice.wyrmId ? "button button--outline helper-card__toggle helper-card__toggle--active" : "button button--outline"}
-                    onClick={() => prepareDeploy(choice.wyrmId)}
-                  >
-                    Deploy {choice.label}
-                  </button>
-                ))}
+              <div ref={deployAreaRef} className="helper-card__hoard-tray" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '12px', background: 'rgba(17, 32, 20, 0.2)', borderRadius: '8px', marginTop: '12px' }}>
+                <span style={{ width: '100%', fontSize: '0.85rem', color: "var(--parchment-200)", textTransform: 'uppercase', marginBottom: '4px' }}>Select Wyrm to Deploy</span>
+                {hoardChoices.map((choice) => {
+                  const wyrm = state.wyrms[choice.wyrmId];
+                  const isSelected = deployWyrmId === choice.wyrmId;
+                  return (
+                    <button
+                      key={choice.wyrmId}
+                      type="button"
+                      className={[
+                        "match-board-cell__token",
+                        `match-board-cell__token--${wyrm.currentOwner}`,
+                        wyrm.isElder ? "match-board-cell__token--elder" : "",
+                        isSelected ? "match-board-cell__token--selected" : ""
+                      ].filter(Boolean).join(" ")}
+                      style={{ 
+                        position: 'relative', 
+                        cursor: 'pointer', 
+                        transform: isSelected ? 'scale(1.15)' : 'scale(1)',
+                        boxShadow: isSelected ? '0 0 0 2px white' : 'none',
+                        transition: 'all 0.2s',
+                        zIndex: isSelected ? 2 : 1
+                      }}
+                      onClick={() => prepareDeploy(choice.wyrmId)}
+                      aria-label={`Deploy ${choice.label}`}
+                    >
+                      {wyrm.isElder ? "★" : getPlayerInitial(playerNames[wyrm.currentOwner])}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
 
@@ -810,7 +806,26 @@ export function MatchScreen({
             ) : null}
           </aside>
 
-          <div className={isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage"} ref={boardRef}>
+          <div className={isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage"} ref={boardRef} style={{ position: 'relative' }}>
+            <div className="deck-discard-preview" style={{ position: 'absolute', bottom: '16px', right: '16px', display: 'flex', gap: '12px', zIndex: 10, pointerEvents: 'none' }}>
+              <div className="deck-preview" style={{ textAlign: 'center', pointerEvents: 'auto' }}>
+                <div className="card-back" style={{ width: '48px', height: '64px', background: "var(--forest-800)", borderRadius: '4px', border: "2px solid rgba(240, 234, 214, 0.2)", display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', boxShadow: "0 4px 6px rgba(17, 32, 20, 0.4)", color: "var(--parchment-200)" }}>{state.deck.length}</div>
+                <span style={{ fontSize: '10px', textTransform: 'uppercase', color: "var(--parchment-200)", fontWeight: 'bold', display: 'block', marginTop: '4px' }}>Deck</span>
+              </div>
+              <div className="discard-preview" style={{ textAlign: 'center', pointerEvents: 'auto', cursor: 'pointer' }} onClick={() => setShowDiscardModal(true)}>
+                <div style={{ width: '48px', height: '64px', position: 'relative', background: 'rgba(17, 32, 20, 0.3)', borderRadius: '4px' }}>
+                  {state.discardPile.length > 0 ? (
+                    <div style={{ position: 'absolute', inset: -4, transform: 'scale(0.65)', transformOrigin: 'top left' }}>
+                      <RuneTileCard tile={state.discardPile[state.discardPile.length - 1]} copies={1} />
+                    </div>
+                  ) : (
+                    <div className="card-empty" style={{ width: '100%', height: '100%', border: "2px dashed rgba(240, 234, 214, 0.2)", borderRadius: '4px' }} />
+                  )}
+                </div>
+                <span style={{ fontSize: '10px', textTransform: 'uppercase', color: "var(--parchment-200)", fontWeight: 'bold', display: 'block', marginTop: '4px' }}>Discard ({state.discardPile.length})</span>
+              </div>
+            </div>
+            
             {isPaused && pauseOverlayDismissed ? (
               <div className="match-board-pause-banner" role="status" aria-live="polite">
                 <span>{disconnectedSeatLabel} disconnected</span>
@@ -859,6 +874,21 @@ export function MatchScreen({
               </div>
             ) : null}
           </div>
+          
+          <aside className="match-sidebar-container" style={{ display: 'flex', flexDirection: 'column', width: '320px', minWidth: '320px', background: 'rgba(17, 32, 20, 0.4)', borderLeft: '1px solid rgba(255, 255, 255, 0.1)', overflowY: 'auto' }}>
+            <PlayerSidebar
+              state={state}
+              discardSelection={discardSelection}
+              peekPlayerId={peekPlayerId}
+              pendingDeployWyrmId={deployWyrmId}
+              canPlayTiles={canPlayTiles}
+              onToggleDiscard={toggleDiscard}
+              onPlaySingle={(tile) => startTileDraft(tile, "single")}
+              onPlayLair={(tile) => startTileDraft(tile, "lair")}
+              onPrepareDeploy={prepareDeploy}
+              onClosePeek={() => setPeekPlayerId(null)}
+            />
+          </aside>
         </section>
 
         <footer ref={handTrayRef} className="hand-tray">
@@ -950,6 +980,29 @@ export function MatchScreen({
           </div>
         </footer>
       </div>
+
+      {showDiscardModal && (
+        <div className="modal-overlay" onClick={() => setShowDiscardModal(false)} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(17, 32, 20, 0.85)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ background: "var(--forest-950)", border: "1px solid var(--forest-800)", padding: '24px', borderRadius: '12px', maxWidth: '80vw', maxHeight: '80vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <h2 style={{ margin: 0 }}>Discard Pile ({state.discardPile.length})</h2>
+              <button type="button" className="text-link" onClick={() => setShowDiscardModal(false)} style={{ fontSize: '1.2rem', padding: '8px', cursor: 'pointer' }}>✕</button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+              {state.discardPile.length > 0 ? [...state.discardPile].reverse().map((tile, i) => (
+                <div key={i} style={{ width: '80px', height: '110px', position: 'relative' }}>
+                  <div style={{ position: 'absolute', transform: 'scale(0.8)', transformOrigin: 'top left' }}>
+                    <RuneTileCard tile={tile} copies={1} />
+                  </div>
+                </div>
+              )) : <p style={{ color: "var(--forest-600)" }}>Discard pile is empty.</p>}
+            </div>
+            <div style={{ marginTop: '32px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" className="button button--outline" onClick={() => setShowDiscardModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
