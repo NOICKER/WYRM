@@ -352,8 +352,14 @@ export function actionMove(
   const next = cloneState(state);
   clearTransientState(next);
 
-  if (next.phase !== "move" && next.phase !== "play_tile") {
+  if (next.phase !== "move") {
     return setError(next, "Movement is only available during the move step.");
+  }
+
+  const currentPlayer = getCurrentPlayer(next);
+  const activeWyrm = next.wyrms[wyrmId];
+  if (!activeWyrm || activeWyrm.currentOwner !== currentPlayer.id) {
+    return setError(next, "You can only move wyrms controlled by the active player.");
   }
 
   const profile = getMoveProfile(next, wyrmId, moveMode);
@@ -361,7 +367,7 @@ export function actionMove(
     return setError(next, "That path is not legal for the selected wyrm.");
   }
 
-  const wyrm = next.wyrms[wyrmId];
+  const wyrm = activeWyrm;
   if (!wyrm.position) {
     return setError(next, "That wyrm is not on the board.");
   }
@@ -409,9 +415,31 @@ export function actionPlaceCoilTrail(
   const next = cloneState(state);
   clearTransientState(next);
 
+  if (next.phase !== "move") {
+    return setError(
+      next,
+      "Extra trail placement is only available for Coil or a forced blocked move during the move step.",
+    );
+  }
+
   const wyrm = next.wyrms[wyrmId];
   if (!wyrm || !wyrm.position) {
     return setError(next, "Choose an active wyrm first.");
+  }
+
+  const currentPlayer = getCurrentPlayer(next);
+  if (wyrm.currentOwner !== currentPlayer.id || wyrm.status !== "active") {
+    return setError(next, "You can only place extra trails with wyrms controlled by the active player.");
+  }
+
+  const usingCoilTrail =
+    next.dieResult === "coil" && next.turnEffects.coilChoice === "extra_trail";
+  const forcedBlockedMove = canResolveBlockedMove(next);
+  if (!usingCoilTrail && !forcedBlockedMove) {
+    return setError(
+      next,
+      "Extra trail placement is only available for Coil or a forced blocked move during the move step.",
+    );
   }
 
   const availableTargets = getAdjacentEmptyCells(next, wyrmId, true);
@@ -445,7 +473,7 @@ export function actionDeploy(state: GameState, wyrmId: WyrmId, target: Coord): G
   const next = cloneState(state);
   clearTransientState(next);
 
-  if (next.phase !== "move" && next.phase !== "play_tile") {
+  if (next.phase !== "move") {
     return setError(next, "Deploy is only available during the move step.");
   }
 
@@ -482,8 +510,8 @@ export function actionPlayTile(state: GameState, request: TilePlayRequest): Game
   const next = cloneState(state);
   clearTransientState(next);
 
-  if (next.phase !== "move" && next.phase !== "play_tile") {
-    return setError(next, "Rune tiles can only be played during the move or tile step.");
+  if (next.phase !== "play_tile") {
+    return setError(next, "Rune tiles can only be played during the tile step.");
   }
 
   if (next.turnEffects.tileActionUsed) {
@@ -728,14 +756,6 @@ export function actionEndTurn(state: GameState): GameState {
     return setError(next, "Finish your move, resolve a blocked move, or use your remaining Tempest Rush before ending the turn.");
   }
 
-  for (const row of next.board) {
-    for (const cell of row) {
-      if (cell.trail && next.currentRound > cell.trail.expiresAfterRound) {
-        cell.trail = null;
-      }
-    }
-  }
-
   const currentPlayer = getCurrentPlayer(next);
   if (currentPlayer.floodPathTurnsRemaining > 0) {
     currentPlayer.floodPathTurnsRemaining -= 1;
@@ -762,6 +782,14 @@ export function actionEndTurn(state: GameState): GameState {
     }
 
     nextPlayerFound = true;
+  }
+
+  for (const row of next.board) {
+    for (const cell of row) {
+      if (cell.trail && next.currentRound >= cell.trail.expiresAfterRound) {
+        cell.trail = null;
+      }
+    }
   }
 
   next.turnNumber += 1;

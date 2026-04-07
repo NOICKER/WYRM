@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ContextTooltip } from "../components/ContextTooltip.tsx";
 import { RuneTileCard } from "../components/RuneTileCard.tsx";
@@ -9,6 +9,7 @@ import {
   getContextTooltipTriggers,
   type ContextTooltipTriggerSnapshot,
 } from "../components/contextTooltipTriggerModel.ts";
+import { getControlledActiveWyrms } from "../state/gameLogic.ts";
 import { PlayerSidebar } from "../components/PlayerSidebar.tsx";
 import { PassTheScreenOverlay } from "./PassTheScreenOverlay.tsx";
 import {
@@ -34,9 +35,21 @@ import {
   mapSeatNamesByPlayerId,
   type AssemblyRoom,
 } from "../ui/appModel.ts";
+import {
+  getHandCardInteractionMode,
+  getPrimaryActionConfig,
+  getVictoryOverlayCopy,
+  shouldShowDeployOverlay,
+} from "../ui/matchInteractionModel.ts";
 import { useMatchInteractions } from "../ui/useMatchInteractions.ts";
 
 const LOCAL_PLAYER_COLORS: PlayerColor[] = ["purple", "coral", "teal", "amber"];
+const TURN_PROGRESS_STEPS = [
+  { key: "draw", label: "Draw" },
+  { key: "roll", label: "Roll" },
+  { key: "move", label: "Move" },
+  { key: "tile", label: "Tile" },
+] as const;
 const EMPTY_TUTORIAL_BOXES: Record<TutorialHighlightTarget, TutorialBoundingBox | null> = {
   den: null,
   hand: null,
@@ -44,11 +57,30 @@ const EMPTY_TUTORIAL_BOXES: Record<TutorialHighlightTarget, TutorialBoundingBox 
   board: null,
 };
 
+type TurnProgressKey = (typeof TURN_PROGRESS_STEPS)[number]["key"];
+
+interface DrawFeedbackState {
+  id: number;
+  count: number;
+  startX: number;
+  startY: number;
+  deltaX: number;
+  deltaY: number;
+  active: boolean;
+}
+
+interface ToastState {
+  id: number;
+  message: string;
+}
+
 interface MatchScreenProps {
   room: AssemblyRoom;
   matchId: string;
   onNavigate: (href: string) => void;
   onAbandonMatch: () => void;
+  onOpenGuide: () => void;
+  onRestartMatch?: () => void;
   localMode?: boolean;
   localPlayerNames?: Record<number, string>;
   localPlayerBots?: Record<number, BotDifficulty>;
@@ -73,13 +105,6 @@ function coordMatches(coord: Coord, list: Coord[]): boolean {
 
 function findMoveTarget(coord: Coord, moveTargets: StepOption[]): StepOption | undefined {
   return moveTargets.find((entry) => entry.row === coord.row && entry.col === coord.col);
-}
-
-function getPhaseActionLabel(state: GameState, canConfirmDiscard: boolean): string {
-  if (state.phase === "draw") return "Draw Rune Tile";
-  if (state.phase === "roll") return "Roll Rune Die";
-  if (state.phase === "discard") return canConfirmDiscard ? "Discard Selected" : "Choose Tiles";
-  return "Advance";
 }
 
 function getColorValue(color: PlayerColor): string {
@@ -241,18 +266,23 @@ export function MatchScreen({
   matchId,
   onNavigate,
   onAbandonMatch,
+  onOpenGuide,
+  onRestartMatch,
   localMode = false,
   localPlayerNames,
   localPlayerBots,
 }: MatchScreenProps): React.JSX.Element {
   const {
+    game,
     state,
+    phase,
     currentPlayer,
     preferredMoveMode,
     selectedMove,
     selectedWyrmId,
     tileDraft,
     deployWyrmId,
+    trailWyrmId,
     discardSelection,
     peekPlayerId,
     instruction,
@@ -273,24 +303,27 @@ export function MatchScreen({
     setPeekPlayerId,
     performPhasePrimaryAction,
     onRoll,
-    onEndTurn,
     onSetCoilChoice,
     onSetPreferredMoveMode,
     chooseOpponent,
     chooseSpecialWyrm,
     hoardChoices,
     opponentChoices,
+    canDeployFromHoard,
   } = useMatchInteractions();
 
   const boardRef = useRef<HTMLDivElement | null>(null);
   const boardScrollRef = useRef<HTMLDivElement | null>(null);
   const handTrayRef = useRef<HTMLElement | null>(null);
+  const handCardsRef = useRef<HTMLDivElement | null>(null);
+  const deckCountRef = useRef<HTMLDivElement | null>(null);
   const dieBadgeRef = useRef<HTMLDivElement | null>(null);
-  const helperCardRef = useRef<HTMLElement | null>(null);
   const coilChoiceRef = useRef<HTMLDivElement | null>(null);
   const deployAreaRef = useRef<HTMLDivElement | null>(null);
   const previousTooltipSnapshotRef = useRef<ContextTooltipTriggerSnapshot | null>(null);
   const previousTooltipEligibilityRef = useRef(false);
+  const previousDrawSnapshotRef = useRef<{ phase: string; playerId: PlayerId; handLength: number } | null>(null);
+  const drawFeedbackTimerIdsRef = useRef<number[]>([]);
   const { activeTooltipKey, showTooltip, dismissTooltip } = useTooltipState();
   const [cellSize, setCellSize] = useState(48);
   const [rollingFace, setRollingFace] = useState<string | null>(null);
@@ -304,7 +337,18 @@ export function MatchScreen({
   const [pauseOverlayDismissed, setPauseOverlayDismissed] = useState(false);
   const [reconnectDeadlineAt, setReconnectDeadlineAt] = useState<number | null>(null);
   const [minutesRemaining, setMinutesRemaining] = useState(room.reconnectDeadlineMinutes);
+  const [showSidebar, setShowSidebar] = useState(false);
+  const toggleSidebar = useCallback(() => setShowSidebar((prev) => !prev), []);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
+  const [drawFeedback, setDrawFeedback] = useState<DrawFeedbackState | null>(null);
+  const [drawToast, setDrawToast] = useState<ToastState | null>(null);
+
+  const clearDrawFeedbackTimers = useCallback(() => {
+    for (const timerId of drawFeedbackTimerIdsRef.current) {
+      window.clearTimeout(timerId);
+    }
+    drawFeedbackTimerIdsRef.current = [];
+  }, []);
 
   // In local mode, derive names and colours from localPlayerNames prop instead of room seats
   const playerNames = useMemo<Record<PlayerId, string>>(() => {
@@ -335,30 +379,57 @@ export function MatchScreen({
   const activePlayerName = playerNames[currentPlayer.id];
   const isPaused = room.matchStatus === "paused_disconnected";
   const isBotPlayer = localPlayerBots && currentPlayer.id in localPlayerBots;
-  const passOverlayBlocking = localMode && state.phase !== "game_over" && overlayDismissedForPlayer !== currentPlayer.id && !isBotPlayer;
+  const passOverlayBlocking = localMode && phase !== "end" && overlayDismissedForPlayer !== currentPlayer.id && !isBotPlayer;
   const disconnectedSeatLabel = getDisconnectedSeatLabel(room.disconnectedSeatName);
   const phaseDisplayLabel = getMatchPhaseDisplayLabel(room.matchStatus, state.phase);
   const pauseCardVisible = shouldShowPauseOverlay(room.matchStatus, pauseOverlayDismissed);
   const pauseDurationCopy = formatMinuteCount(room.reconnectDeadlineMinutes);
   const pauseRemainingCopy = formatMinuteCount(minutesRemaining);
+  const handCardInteractionMode = getHandCardInteractionMode({
+    phase,
+    isPaused,
+    canPlayTiles,
+  });
+  const primaryAction = getPrimaryActionConfig({
+    phase,
+    canConfirmDiscard,
+    canConfirmMove,
+    canSkipTile: canEndTurn,
+    tileActionUsed: state.turnEffects.tileActionUsed,
+    hasTileSelection: tileDraft != null,
+    isPaused,
+  });
+  const hasClearableInteraction =
+    selectedMove != null
+    || tileDraft != null
+    || deployWyrmId != null
+    || discardSelection.length > 0;
+  const showDrawHelper = !isPaused && phase === "draw";
+  const turnProgressPhase: TurnProgressKey =
+    phase === "discard" ? "draw" : phase === "end" ? "tile" : phase;
+  const turnProgressStepIndex = TURN_PROGRESS_STEPS.findIndex((step) => step.key === turnProgressPhase);
+  const showVictoryOverlay = state.winner !== null;
+  const victoryOverlayCopy = getVictoryOverlayCopy(state, playerNames);
+  const victoryAccentColor = state.winner ? getColorValue(playerColors[state.winner]) : currentPlayerColor;
+  const canRestartMatch = localMode || Boolean(onRestartMatch);
 
   // Show pass-the-screen overlay whenever the active player changes in local mode
   useEffect(() => {
     if (!localMode) return;
-    if (state.phase === "game_over") return;
+    if (phase === "end") return;
     if (localPlayerBots && currentPlayer.id in localPlayerBots) return;
     // Only show if the current player hasn't already dismissed for this turn
     if (overlayDismissedForPlayer === currentPlayer.id) return;
     setShowPassOverlay(true);
-  }, [currentPlayer.id, localMode, state.phase, localPlayerBots]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentPlayer.id, localMode, phase, localPlayerBots]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset dismissed tracker whenever phase returns to draw (new turn)
   useEffect(() => {
     if (!localMode) return;
-    if (state.phase === "draw") {
+    if (phase === "draw") {
       setOverlayDismissedForPlayer(null);
     }
-  }, [localMode, state.phase]);
+  }, [localMode, phase]);
 
   useEffect(() => {
     if (!isPaused) {
@@ -386,6 +457,13 @@ export function MatchScreen({
     const intervalId = window.setInterval(syncCountdown, 60 * 1000);
     return () => window.clearInterval(intervalId);
   }, [isPaused, reconnectDeadlineAt]);
+
+  useEffect(
+    () => () => {
+      clearDrawFeedbackTimers();
+    },
+    [clearDrawFeedbackTimers],
+  );
 
   useEffect(() => {
     if (!isPaused) {
@@ -496,7 +574,7 @@ export function MatchScreen({
     && !showTutorial
     && !passOverlayBlocking
     && !isPaused
-    && state.phase !== "game_over"
+    && phase !== "end"
     && localViewerPlayerId != null
     && currentPlayer.id === localViewerPlayerId;
 
@@ -530,16 +608,35 @@ export function MatchScreen({
     previousTooltipEligibilityRef.current = canShowContextTooltips;
   }, [canShowContextTooltips, showTooltip, tooltipSnapshot]);
 
-  let activeTooltipAnchorRef: React.RefObject<Element | null> = helperCardRef;
-  if (activeTooltipKey === "trail_created" || activeTooltipKey === "sacred_grove_nearby" || activeTooltipKey === "capture_available") {
+  let activeTooltipAnchorRef: React.RefObject<Element | null> = boardRef;
+  if (
+    activeTooltipKey === "trail_created"
+    || activeTooltipKey === "sacred_grove_nearby"
+    || activeTooltipKey === "capture_available"
+    || activeTooltipKey === "blocked_move_available"
+  ) {
     activeTooltipAnchorRef = boardScrollRef;
   } else if (activeTooltipKey === "lair_power_available") {
     activeTooltipAnchorRef = handTrayRef;
   } else if (activeTooltipKey === "coil_choice") {
     activeTooltipAnchorRef = coilChoiceRef.current ? coilChoiceRef : dieBadgeRef;
   } else if (activeTooltipKey === "hoard_deploy_available") {
-    activeTooltipAnchorRef = deployAreaRef.current ? deployAreaRef : helperCardRef;
+    activeTooltipAnchorRef = deployAreaRef.current ? deployAreaRef : boardRef;
   }
+
+  // Determine if the board-action-overlay should render
+  const showCoilChoice = !isPaused && phase === "move" && state.dieResult === "coil" && !state.turnEffects.coilChoice;
+  const showTargetSelection = !isPaused && (tileDraft?.tile === "light" || (tileDraft?.tile === "void" && !tileDraft.opponentId) || (tileDraft?.tile === "void" && tileDraft.mode === "lair"));
+  const showVoidConfirm = !isPaused && tileDraft?.tile === "void" && tileDraft.mode === "single" && Boolean(tileDraft.opponentId);
+  const showSpecialWyrmChoice = !isPaused && ((tileDraft?.tile === "shadow" && tileDraft.mode === "lair") || (tileDraft?.tile === "serpent" && tileDraft.mode === "lair"));
+  const showDeployHoard = shouldShowDeployOverlay({
+    state,
+    isPaused,
+    hasTileDraft: tileDraft != null,
+    deployWyrmId,
+    hoardChoicesCount: hoardChoices.length,
+  });
+  const showBoardOverlay = showCoilChoice || showTargetSelection || showVoidConfirm || showSpecialWyrmChoice || showDeployHoard;
 
   useEffect(() => {
     const container = boardRef.current;
@@ -577,14 +674,83 @@ export function MatchScreen({
     return () => observer.disconnect();
   }, [state.board]);
 
-  const phaseActionLabel = getPhaseActionLabel(state, canConfirmDiscard);
   const visiblePeekHand = peekPlayerId
     ? state.players.find((player) => player.id === peekPlayerId)?.hand ?? []
     : [];
   const dieBadgeValue = rollingFace ?? (state.dieResult == null ? "?" : state.dieResult === "surge" ? "5" : state.dieResult === "coil" ? "∞" : String(state.dieResult));
 
+  useEffect(() => {
+    const previousSnapshot = previousDrawSnapshotRef.current;
+
+    if (
+      previousSnapshot
+      && previousSnapshot.playerId === currentPlayer.id
+      && previousSnapshot.phase === "draw"
+      && phase !== "draw"
+    ) {
+      const drawnCount = currentPlayer.hand.length - previousSnapshot.handLength;
+
+      if (drawnCount > 0) {
+        clearDrawFeedbackTimers();
+
+        const feedbackId = Date.now();
+        const toastMessage =
+          drawnCount === 1 ? "+1 Rune Tile added" : `+${drawnCount} Rune Tiles added`;
+        setDrawToast({ id: feedbackId, message: toastMessage });
+
+        const deckRect = deckCountRef.current?.getBoundingClientRect();
+        const handRect =
+          handCardsRef.current?.getBoundingClientRect()
+          ?? handTrayRef.current?.getBoundingClientRect()
+          ?? null;
+
+        if (deckRect && handRect) {
+          const startX = deckRect.left + deckRect.width / 2 - 28;
+          const startY = deckRect.top + deckRect.height / 2 - 38;
+          const endX = handRect.left + handRect.width / 2 - 28;
+          const endY = handRect.top + Math.min(18, handRect.height * 0.18);
+
+          setDrawFeedback({
+            id: feedbackId,
+            count: drawnCount,
+            startX,
+            startY,
+            deltaX: endX - startX,
+            deltaY: endY - startY,
+            active: false,
+          });
+
+          drawFeedbackTimerIdsRef.current.push(
+            window.setTimeout(() => {
+              setDrawFeedback((current) =>
+                current?.id === feedbackId ? { ...current, active: true } : current,
+              );
+            }, 16),
+          );
+          drawFeedbackTimerIdsRef.current.push(
+            window.setTimeout(() => {
+              setDrawFeedback((current) => (current?.id === feedbackId ? null : current));
+            }, 520),
+          );
+        }
+
+        drawFeedbackTimerIdsRef.current.push(
+          window.setTimeout(() => {
+            setDrawToast((current) => (current?.id === feedbackId ? null : current));
+          }, 1900),
+        );
+      }
+    }
+
+    previousDrawSnapshotRef.current = {
+      phase,
+      playerId: currentPlayer.id,
+      handLength: currentPlayer.hand.length,
+    };
+  }, [clearDrawFeedbackTimers, currentPlayer.hand.length, currentPlayer.id, phase]);
+
   const handlePrimaryAction = () => {
-    if (state.phase === "roll") {
+    if (phase === "roll") {
       const faces = ["1", "2", "3", "4", "∞", "5"];
       let step = 0;
       setRollingFace(faces[0]);
@@ -602,9 +768,26 @@ export function MatchScreen({
     performPhasePrimaryAction();
   };
 
+  const handleRestartMatch = () => {
+    clearDrawFeedbackTimers();
+    setDrawFeedback(null);
+    setDrawToast(null);
+    setShowDiscardModal(false);
+    setShowSidebar(false);
+    setShowPassOverlay(false);
+    setPauseOverlayDismissed(false);
+
+    if (onRestartMatch) {
+      onRestartMatch();
+      return;
+    }
+
+    game.startNewGame(state.playerCount);
+  };
+
   return (
     <main className="match-screen">
-      {localMode && showPassOverlay && (
+      {localMode && showPassOverlay && !showVictoryOverlay && (
         <PassTheScreenOverlay
           playerName={activePlayerName}
           playerColor={playerColors[currentPlayer.id]}
@@ -614,7 +797,7 @@ export function MatchScreen({
           }}
         />
       )}
-      {showTutorial ? (
+      {showTutorial && !showVictoryOverlay ? (
         <TutorialOverlay
           currentPhase={state.phase}
           selectedWyrmId={selectedWyrmId}
@@ -629,7 +812,56 @@ export function MatchScreen({
           onDismiss={() => dismissTooltip(activeTooltipKey)}
         />
       ) : null}
+
+      {/* ── Sidebar Drawer (slides from right) ── */}
+      {showVictoryOverlay && victoryOverlayCopy ? (
+        <div
+          className="match-victory-layer"
+          style={{ "--victory-accent": victoryAccentColor } as React.CSSProperties}
+        >
+          <article className="match-victory-card" role="dialog" aria-modal="true" aria-labelledby="match-victory-title">
+            <span className="match-victory-card__eyebrow">Victory</span>
+            <h1 id="match-victory-title" className="match-victory-card__title">
+              {victoryOverlayCopy.title}
+            </h1>
+            <p className="match-victory-card__detail">{victoryOverlayCopy.detail}</p>
+            <p className="match-victory-card__meta">
+              The match is over. Start a fresh game or exit back out when you&apos;re ready.
+            </p>
+            <div className="match-victory-card__actions">
+              {canRestartMatch ? (
+                <button type="button" className="button button--forest" onClick={handleRestartMatch}>
+                  Play Again
+                </button>
+              ) : null}
+              <button type="button" className="button button--outline" onClick={onAbandonMatch}>
+                Exit Game
+              </button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+      <div
+        className={showSidebar ? "sidebar-drawer-backdrop sidebar-drawer-backdrop--open" : "sidebar-drawer-backdrop"}
+        onClick={() => setShowSidebar(false)}
+      />
+      <div className={showSidebar ? "sidebar-drawer sidebar-drawer--open" : "sidebar-drawer"}>
+        <div className="sidebar-drawer__header">
+          <h3>Game Log</h3>
+          <button type="button" className="sidebar-drawer__close" onClick={() => setShowSidebar(false)} aria-label="Close drawer">✕</button>
+        </div>
+        <PlayerSidebar
+          state={state}
+          peekPlayerId={peekPlayerId}
+          pendingDeployWyrmId={deployWyrmId}
+          canDeployFromHoard={canDeployFromHoard}
+          onPrepareDeploy={prepareDeploy}
+          onClosePeek={() => setPeekPlayerId(null)}
+        />
+      </div>
+
       <div className="match-screen__viewport">
+        {/* ── Row 1: Topbar ── */}
         <header className="match-topbar">
           <Wordmark href="/lobby" onNavigate={onNavigate} compact />
 
@@ -638,6 +870,23 @@ export function MatchScreen({
           </div>
 
           <div className="match-topbar__right">
+            <button
+              type="button"
+              className="button button--outline"
+              style={{ whiteSpace: "nowrap" }}
+              onClick={onOpenGuide}
+            >
+              How to Play
+            </button>
+            <button
+              type="button"
+              className="button button--outline sidebar-toggle-btn"
+              onClick={toggleSidebar}
+              aria-label="Open game log"
+              title="Game Log"
+            >
+              📜
+            </button>
             <button
               type="button"
               className="button button--outline"
@@ -659,179 +908,238 @@ export function MatchScreen({
           </div>
         </header>
 
+        {/* ── Row 2: Opponent Tracker Bar (all 4 players) ── */}
+        <div className="opponent-tracker-bar">
+          {state.players.map((player) => {
+            const activeCount = getControlledActiveWyrms(state, player.id).length;
+            const isTurn = player.id === currentPlayer.id;
+            const pColor = getColorValue(playerColors[player.id]);
+            return (
+              <div key={player.id} className={isTurn ? "tracker-card tracker-card--active" : "tracker-card"}>
+                <div className="tracker-card__color-dot" style={{ background: pColor }} />
+                <div className="tracker-card__info">
+                  <div className="tracker-card__name">{playerNames[player.id]}</div>
+                  <div className="tracker-card__stats">
+                    <span>🐉{activeCount}</span>
+                    <span>🃏{player.hand.length}</span>
+                    <span>{player.elderTokenAvailable ? "★" : "☆"}</span>
+                  </div>
+                </div>
+                <div className="tracker-card__hoard">
+                  {player.hoard.length > 0 ? player.hoard.map((wyrmId) => {
+                    const wyrm = state.wyrms[wyrmId];
+                    const tokenColor = getColorValue(playerColors[wyrm.originalOwner as PlayerId]);
+                    return (
+                      <span
+                        key={wyrmId}
+                        className="tracker-card__hoard-token"
+                        style={{ background: tokenColor }}
+                        title={wyrm.label}
+                      >
+                        {wyrm.isElder ? "★" : getPlayerInitial(playerNames[wyrm.originalOwner as PlayerId])}
+                      </span>
+                    );
+                  }) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── Row 3: Board Area ── */}
         <section className="match-body">
-          <aside ref={helperCardRef} className="helper-card">
-            <div className="helper-card__header">
-              <div>
-                <span>Action Helper</span>
-                <strong>{matchId}</strong>
-              </div>
+          {!isPaused && instruction && phase !== "end" ? (
+            <div className="match-board-guidance" aria-live="polite">
+              <p className="match-board-guidance__instruction">{instruction}</p>
+              {phase === "discard" ? (
+                <p className="match-board-guidance__meta">
+                  Discard down to five tiles before you can roll.
+                </p>
+              ) : null}
             </div>
-
-            <p className="helper-card__copy">
-              {isPaused
-                ? `Match paused while we wait for ${disconnectedSeatLabel} to reconnect.`
-                : instruction}
-            </p>
-
-            <div className="helper-card__legend">
-              <span><i className="legend-dot legend-dot--move" /> Valid Move</span>
-              <span><i className="legend-dot legend-dot--capture" /> Lethal Strike</span>
-            </div>
-
-            {!isPaused && (state.phase === "draw" || state.phase === "roll" || state.phase === "discard") ? (
-              <button type="button" className="button button--forest button--wide" onClick={handlePrimaryAction}>
-                {phaseActionLabel}
-              </button>
-            ) : null}
-
-            {state.error ? <ScreenError message={state.error} /> : null}
-
-            {!isPaused && state.phase === "move" && state.dieResult === "coil" && !state.turnEffects.coilChoice ? (
-              <div
-                ref={coilChoiceRef}
-                className="coil-choice-panel"
-                style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}
-              >
-                {[1, 2, 3].map((choice) => (
-                  <button key={choice} type="button" className="button button--outline" onClick={() => onSetCoilChoice(choice as 1 | 2 | 3)}>
-                    Move {choice}
-                  </button>
-                ))}
-                <button type="button" className="button button--forest" style={{ backgroundColor: "var(--color-primary-base)" }} onClick={() => onSetCoilChoice("extra_trail")}>
-                  Place Trail
-                </button>
+          ) : null}
+          <div
+            className={isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage"}
+            ref={boardRef}
+            style={{ position: 'relative', width: 'min(100%, 72rem)', height: '100%', maxHeight: '100%' }}
+          >
+            {/* Floating clear selection */}
+            {!isPaused && phase !== "end" && hasClearableInteraction ? (
+              <div className="board-clear-action">
+                <button type="button" className="button button--ghost" onClick={clearInteraction}>Clear</button>
               </div>
             ) : null}
 
-            {!isPaused && state.phase === "move" && state.turnEffects.tempestRushRemaining.length > 0 && !state.turnEffects.mainMoveCompleted ? (
-              <div className="helper-card__stack">
+            {/* Tempest Rush mode toggle (floating, top-right) */}
+            {!isPaused && phase === "move" && state.turnEffects.tempestRushRemaining.length > 0 && !state.turnEffects.mainMoveCompleted ? (
+              <div style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', zIndex: 8, display: 'flex', gap: '0.35rem' }}>
                 <button
                   type="button"
                   className={preferredMoveMode === "main" ? "button button--outline helper-card__toggle helper-card__toggle--active" : "button button--outline helper-card__toggle"}
+                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', borderRadius: '999px' }}
                   onClick={() => onSetPreferredMoveMode("main")}
                 >
-                  Main Move
+                  Main
                 </button>
                 <button
                   type="button"
                   className={preferredMoveMode === "tempest" ? "button button--outline helper-card__toggle helper-card__toggle--active" : "button button--outline helper-card__toggle"}
+                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', borderRadius: '999px' }}
                   onClick={() => onSetPreferredMoveMode("tempest")}
                 >
-                  Tempest Rush
+                  Tempest
                 </button>
               </div>
             ) : null}
 
-            {!isPaused && (tileDraft?.tile === "light" || (tileDraft?.tile === "void" && !tileDraft.opponentId) || tileDraft?.tile === "void" && tileDraft.mode === "lair") ? (
-              <div className="helper-card__stack">
-                {opponentChoices.map((opponent) => (
-                  <button key={opponent.id} type="button" className="button button--outline" onClick={() => chooseOpponent(opponent.id)}>
-                    {opponent.label}
-                  </button>
-                ))}
+            {/* Deck / Discard preview */}
+            <div className="deck-discard-preview" style={{ position: 'absolute', bottom: '3.5rem', right: '0.75rem', display: 'flex', gap: '0.5rem', zIndex: 7, pointerEvents: 'none' }}>
+              <div style={{ textAlign: 'center', pointerEvents: 'auto' }}>
+                <div ref={deckCountRef} style={{ width: '40px', height: '54px', background: 'var(--forest-800)', borderRadius: '4px', border: '2px solid rgba(240, 234, 214, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(17, 32, 20, 0.4)', color: 'var(--parchment-200)', fontSize: '0.8rem' }}>{state.deck.length}</div>
+                <span style={{ fontSize: '9px', textTransform: 'uppercase', color: 'var(--parchment-200)', fontWeight: 'bold', display: 'block', marginTop: '2px' }}>Deck</span>
               </div>
-            ) : null}
-
-            {!isPaused && tileDraft?.tile === "void" && tileDraft.mode === "single" && tileDraft.opponentId ? (
-              <button type="button" className="button button--forest button--wide" onClick={confirmVoidSelection}>
-                Confirm Erasure
-              </button>
-            ) : null}
-
-            {!isPaused && ((tileDraft?.tile === "shadow" && tileDraft.mode === "lair") || (tileDraft?.tile === "serpent" && tileDraft.mode === "lair")) ? (
-              <div className="helper-card__stack">
-                {hoardChoices.map((choice) => (
-                  <button key={choice.wyrmId} type="button" className="button button--outline" onClick={() => chooseSpecialWyrm(choice.wyrmId)}>
-                    {choice.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {visiblePeekHand.length > 0 ? (
-              <div className="helper-card__peek">
-                <div className="helper-card__peek-header">
-                  <strong>Revealed Hand{peekPlayerId ? `: ${playerNames[peekPlayerId]}` : ""}</strong>
-                  <button type="button" className="text-link" onClick={() => setPeekPlayerId(null)}>
-                    Close
-                  </button>
+              <div style={{ textAlign: 'center', pointerEvents: 'auto', cursor: 'pointer' }} onClick={() => setShowDiscardModal(true)}>
+                <div style={{ width: '40px', height: '54px', position: 'relative', background: 'rgba(17, 32, 20, 0.3)', borderRadius: '4px' }}>
+                  {state.discardPile.length > 0 ? (
+                    <div style={{ position: 'absolute', inset: -3, transform: 'scale(0.55)', transformOrigin: 'top left' }}>
+                      <RuneTileCard tile={state.discardPile[state.discardPile.length - 1]} copies={1} />
+                    </div>
+                  ) : (
+                    <div style={{ width: '100%', height: '100%', border: '2px dashed rgba(240, 234, 214, 0.2)', borderRadius: '4px' }} />
+                  )}
                 </div>
-                <div className="helper-card__peek-list">
+                <span style={{ fontSize: '9px', textTransform: 'uppercase', color: 'var(--parchment-200)', fontWeight: 'bold', display: 'block', marginTop: '2px' }}>Discard</span>
+              </div>
+            </div>
+
+            {/* Error display */}
+            {state.error ? <div style={{ position: 'absolute', top: '2.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 9 }}><ScreenError message={state.error} /></div> : null}
+
+            {/* Peek hand (inline floating) */}
+            {visiblePeekHand.length > 0 ? (
+              <div style={{ position: 'absolute', top: '2.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 9, padding: '0.6rem 1rem', borderRadius: '0.75rem', background: 'rgba(13, 23, 14, 0.85)', backdropFilter: 'blur(6px)', border: '1px solid rgba(240, 234, 214, 0.1)', maxWidth: '90%' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.4rem' }}>
+                  <strong style={{ fontSize: '0.75rem' }}>Revealed Hand{peekPlayerId ? `: ${playerNames[peekPlayerId]}` : ""}</strong>
+                  <button type="button" className="text-link" style={{ fontSize: '0.75rem' }} onClick={() => setPeekPlayerId(null)}>Close</button>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
                   {visiblePeekHand.map((tile, index) => (
-                    <span key={`${tile}-${index}`}>{getTileName(tile)}</span>
+                    <span key={`${tile}-${index}`} style={{ padding: '0.25rem 0.45rem', borderRadius: '999px', background: 'rgba(184, 134, 11, 0.15)', fontSize: '0.72rem' }}>{getTileName(tile)}</span>
                   ))}
                 </div>
               </div>
             ) : null}
 
-            {!isPaused && hoardChoices.length > 0 && !tileDraft && (state.phase === "move" || state.phase === "play_tile") ? (
-              <div ref={deployAreaRef} className="helper-card__hoard-tray" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '12px', background: 'rgba(17, 32, 20, 0.2)', borderRadius: '8px', marginTop: '12px' }}>
-                <span style={{ width: '100%', fontSize: '0.85rem', color: "var(--parchment-200)", textTransform: 'uppercase', marginBottom: '4px' }}>Select Wyrm to Deploy</span>
-                {hoardChoices.map((choice) => {
-                  const wyrm = state.wyrms[choice.wyrmId];
-                  const isSelected = deployWyrmId === choice.wyrmId;
-                  return (
-                    <button
-                      key={choice.wyrmId}
-                      type="button"
-                      className={[
-                        "match-board-cell__token",
-                        `match-board-cell__token--${wyrm.currentOwner}`,
-                        wyrm.isElder ? "match-board-cell__token--elder" : "",
-                        isSelected ? "match-board-cell__token--selected" : ""
-                      ].filter(Boolean).join(" ")}
-                      style={{ 
-                        position: 'relative', 
-                        cursor: 'pointer', 
-                        transform: isSelected ? 'scale(1.15)' : 'scale(1)',
-                        boxShadow: isSelected ? '0 0 0 2px white' : 'none',
-                        transition: 'all 0.2s',
-                        zIndex: isSelected ? 2 : 1
-                      }}
-                      onClick={() => prepareDeploy(choice.wyrmId)}
-                      aria-label={`Deploy ${choice.label}`}
-                    >
-                      {wyrm.isElder ? "★" : getPlayerInitial(playerNames[wyrm.currentOwner])}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
+            {/* ── Board Action Overlay (click-catching) ── */}
+            {showBoardOverlay ? (
+              <div className="board-action-overlay" onClick={(e) => e.stopPropagation()}>
+                <div className="board-action-overlay__panel">
+                  {/* Coil choice */}
+                  {showCoilChoice ? (
+                    <>
+                      <h4 className="board-action-overlay__title">Coil — Choose Movement</h4>
+                      <div ref={coilChoiceRef} className="board-action-overlay__grid">
+                        {[1, 2, 3].map((choice) => (
+                          <button key={choice} type="button" className="button button--outline" onClick={() => onSetCoilChoice(choice as 1 | 2 | 3)}>
+                            Move {choice}
+                          </button>
+                        ))}
+                        <button type="button" className="button button--forest" onClick={() => onSetCoilChoice("extra_trail")}>
+                          Place Trail
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
 
-            {!isPaused ? (
-              <button type="button" className="button button--ghost button--wide" onClick={clearInteraction}>
-              Clear Selection
-              </button>
-            ) : null}
-          </aside>
+                  {/* Target selection (void/light opponent chooser) */}
+                  {showTargetSelection ? (
+                    <>
+                      <h4 className="board-action-overlay__title">Choose Target</h4>
+                      <div className="board-action-overlay__grid">
+                        {opponentChoices.map((opponent) => (
+                          <button key={opponent.id} type="button" className="button button--outline" onClick={() => chooseOpponent(opponent.id)}>
+                            {opponent.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
 
-          <div className={isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage"} ref={boardRef} style={{ position: 'relative' }}>
-            <div className="deck-discard-preview" style={{ position: 'absolute', bottom: '16px', right: '16px', display: 'flex', gap: '12px', zIndex: 10, pointerEvents: 'none' }}>
-              <div className="deck-preview" style={{ textAlign: 'center', pointerEvents: 'auto' }}>
-                <div className="card-back" style={{ width: '48px', height: '64px', background: "var(--forest-800)", borderRadius: '4px', border: "2px solid rgba(240, 234, 214, 0.2)", display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', boxShadow: "0 4px 6px rgba(17, 32, 20, 0.4)", color: "var(--parchment-200)" }}>{state.deck.length}</div>
-                <span style={{ fontSize: '10px', textTransform: 'uppercase', color: "var(--parchment-200)", fontWeight: 'bold', display: 'block', marginTop: '4px' }}>Deck</span>
-              </div>
-              <div className="discard-preview" style={{ textAlign: 'center', pointerEvents: 'auto', cursor: 'pointer' }} onClick={() => setShowDiscardModal(true)}>
-                <div style={{ width: '48px', height: '64px', position: 'relative', background: 'rgba(17, 32, 20, 0.3)', borderRadius: '4px' }}>
-                  {state.discardPile.length > 0 ? (
-                    <div style={{ position: 'absolute', inset: -4, transform: 'scale(0.65)', transformOrigin: 'top left' }}>
-                      <RuneTileCard tile={state.discardPile[state.discardPile.length - 1]} copies={1} />
-                    </div>
-                  ) : (
-                    <div className="card-empty" style={{ width: '100%', height: '100%', border: "2px dashed rgba(240, 234, 214, 0.2)", borderRadius: '4px' }} />
-                  )}
+                  {/* Void confirm */}
+                  {showVoidConfirm ? (
+                    <>
+                      <h4 className="board-action-overlay__title">Confirm Void Erasure</h4>
+                      <button type="button" className="button button--forest button--wide" onClick={confirmVoidSelection}>
+                        Confirm Erasure
+                      </button>
+                    </>
+                  ) : null}
+
+                  {/* Shadow/Serpent lair wyrm choice */}
+                  {showSpecialWyrmChoice ? (
+                    <>
+                      <h4 className="board-action-overlay__title">Select Wyrm</h4>
+                      <div className="board-action-overlay__grid">
+                        {hoardChoices.map((choice) => (
+                          <button key={choice.wyrmId} type="button" className="button button--outline" onClick={() => chooseSpecialWyrm(choice.wyrmId)}>
+                            {choice.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+
+                  {/* Deploy hoard */}
+                  {showDeployHoard ? (
+                    <>
+                      <h4 className="board-action-overlay__title">Deploy from Hoard</h4>
+                      <div ref={deployAreaRef} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', padding: '0.5rem 0' }}>
+                        {hoardChoices.map((choice) => {
+                          const wyrm = state.wyrms[choice.wyrmId];
+                          const isSelected = deployWyrmId === choice.wyrmId;
+                          return (
+                            <button
+                              key={choice.wyrmId}
+                              type="button"
+                              className={[
+                                "match-board-cell__token",
+                                `match-board-cell__token--${wyrm.currentOwner}`,
+                                wyrm.isElder ? "match-board-cell__token--elder" : "",
+                                isSelected ? "match-board-cell__token--selected" : ""
+                              ].filter(Boolean).join(" ")}
+                              style={{
+                                position: 'relative',
+                                cursor: 'pointer',
+                                transform: isSelected ? 'scale(1.25)' : 'scale(1)',
+                                boxShadow: isSelected ? '0 0 0 2px white' : 'none',
+                                transition: 'all 0.2s',
+                                width: '36px',
+                                height: '36px',
+                              }}
+                              onClick={() => prepareDeploy(choice.wyrmId)}
+                              aria-label={`Deploy ${choice.label}`}
+                              disabled={!canDeployFromHoard}
+                            >
+                              {wyrm.isElder ? "★" : getPlayerInitial(playerNames[wyrm.currentOwner])}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
-                <span style={{ fontSize: '10px', textTransform: 'uppercase', color: "var(--parchment-200)", fontWeight: 'bold', display: 'block', marginTop: '4px' }}>Discard ({state.discardPile.length})</span>
               </div>
-            </div>
-            
+            ) : null}
+
+            {/* Pause banner (inline) */}
             {isPaused && pauseOverlayDismissed ? (
               <div className="match-board-pause-banner" role="status" aria-live="polite">
                 <span>{disconnectedSeatLabel} disconnected</span>
                 <span>{pauseRemainingCopy} remaining</span>
               </div>
             ) : null}
+
+            {/* Board grid */}
             <div ref={boardScrollRef} className="match-board-scroll">
               <MatchBoardGrid
                 cellSize={cellSize}
@@ -842,10 +1150,12 @@ export function MatchScreen({
                 actionTargets={actionTargets}
                 markedTargets={markedTargets}
                 playerNames={playerNames}
-                disabled={isPaused}
+                disabled={showVictoryOverlay || isPaused || (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null)}
                 onCellClick={handleBoardClick}
               />
             </div>
+
+            {/* Pause overlay card */}
             {isPaused && pauseCardVisible ? (
               <div className="match-board-pause-layer">
                 <article className="match-board-pause-card">
@@ -874,61 +1184,48 @@ export function MatchScreen({
               </div>
             ) : null}
           </div>
-          
-          <aside className="match-sidebar-container" style={{ display: 'flex', flexDirection: 'column', width: '320px', minWidth: '320px', background: 'rgba(17, 32, 20, 0.4)', borderLeft: '1px solid rgba(255, 255, 255, 0.1)', overflowY: 'auto' }}>
-            <PlayerSidebar
-              state={state}
-              discardSelection={discardSelection}
-              peekPlayerId={peekPlayerId}
-              pendingDeployWyrmId={deployWyrmId}
-              canPlayTiles={canPlayTiles}
-              onToggleDiscard={toggleDiscard}
-              onPlaySingle={(tile) => startTileDraft(tile, "single")}
-              onPlayLair={(tile) => startTileDraft(tile, "lair")}
-              onPrepareDeploy={prepareDeploy}
-              onClosePeek={() => setPeekPlayerId(null)}
-            />
-          </aside>
         </section>
 
+        {/* ── Row 4: Hand Tray (locked 200px) ── */}
         <footer ref={handTrayRef} className="hand-tray">
           <div className="hand-tray__player">
             <h2 style={{ color: currentPlayerColor }}>{activePlayerName}</h2>
-            <div className="phase-stepper">
+            <div className="turn-progress" aria-label="Turn Progress">
+              <span className="turn-progress__label">Turn Progress:</span>
               {isPaused ? (
-                <span className="phase-stepper__pill phase-stepper__pill--paused">Paused</span>
+                <span className="turn-progress__pill turn-progress__pill--paused">Paused</span>
               ) : (
-                ["draw", "roll", "move", "play_tile"].map((phase, index) => {
-                  const active = state.phase === phase;
-                  const completed =
-                    phase === "draw"
-                      ? state.phase !== "draw"
-                      : phase === "roll"
-                        ? ["move", "play_tile", "game_over"].includes(state.phase)
-                        : phase === "move"
-                          ? state.turnEffects.mainMoveCompleted || state.phase === "play_tile" || state.phase === "game_over"
-                          : state.turnEffects.tileActionUsed || state.phase === "game_over";
+                TURN_PROGRESS_STEPS.map((step, index) => {
+                  const active = phase !== "end" && index === turnProgressStepIndex;
+                  const completed = phase === "end" || index < turnProgressStepIndex;
                   return (
-                    <span
-                      key={phase}
-                      className={[
-                        "phase-stepper__pill",
-                        active ? "phase-stepper__pill--active" : "",
-                        completed && !active ? "phase-stepper__pill--done" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                      style={active ? { backgroundColor: currentPlayerColor } : undefined}
-                    >
-                      {index === 3 ? "Tile" : phase[0].toUpperCase() + phase.slice(1)}
-                    </span>
+                    <React.Fragment key={step.key}>
+                      <span
+                        className={[
+                          "turn-progress__step",
+                          active ? "turn-progress__step--active" : "",
+                          completed ? "turn-progress__step--done" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        style={active ? { color: currentPlayerColor } : undefined}
+                        aria-current={active ? "step" : undefined}
+                      >
+                        <span>{step.label}</span>
+                        {completed ? <span className="turn-progress__status" aria-hidden="true">✓</span> : null}
+                        {!completed && active ? <span className="turn-progress__status" aria-hidden="true">●</span> : null}
+                      </span>
+                      {index < TURN_PROGRESS_STEPS.length - 1 ? (
+                        <span className="turn-progress__separator" aria-hidden="true">→</span>
+                      ) : null}
+                    </React.Fragment>
                   );
                 })
               )}
             </div>
           </div>
 
-          <div className="hand-tray__cards">
+          <div ref={handCardsRef} className="hand-tray__cards">
             {trayTiles.map((tile, index) => {
               const copies = tileCounts[tile];
               const selectedForDiscard = !isPaused && discardSelection.includes(index);
@@ -944,22 +1241,25 @@ export function MatchScreen({
                   style={{ transform: `translateY(${index === lairFocusIndex && lairTile ? -18 : 0}px) rotate(${(index - (trayTiles.length - 1) / 2) * 3}deg)` }}
                 >
                   <RuneTileCard
+                    className="rune-card-shell--tray"
                     tile={tile}
                     copies={copies}
                     active={cardActive}
                     elevated={index === lairFocusIndex && Boolean(lairTile)}
                     lairReady={lairTile === tile && copies >= 3}
-                    disabled={isPaused || (!canPlayTiles && state.phase !== "discard")}
-                    onPlay={
-                      isPaused
-                        ? undefined
-                        : state.phase === "discard"
+                    disabled={handCardInteractionMode === "disabled"}
+                    onActivate={
+                      handCardInteractionMode === "discard"
                         ? () => toggleDiscard(index)
-                        : canPlayTiles
+                        : handCardInteractionMode === "play"
                           ? () => startTileDraft(tile, "single")
                           : undefined
                     }
-                    onPlayLair={!isPaused && copies >= 3 && canPlayTiles ? () => startTileDraft(tile, "lair") : undefined}
+                    onPlayLair={
+                      handCardInteractionMode === "play" && copies >= 3
+                        ? () => startTileDraft(tile, "lair")
+                        : undefined
+                    }
                   />
                 </div>
               );
@@ -967,23 +1267,58 @@ export function MatchScreen({
           </div>
 
           <div className="hand-tray__actions">
-            {!isPaused ? (
-              <>
-                <button type="button" className="button button--forest button--wide" disabled={!canConfirmMove} onClick={performPhasePrimaryAction}>
-                  CONFIRM MOVE
-                </button>
-                <button type="button" className="button button--outline button--wide" disabled={!canEndTurn} onClick={onEndTurn}>
-                  END TURN
-                </button>
-              </>
+            {showDrawHelper ? (
+              <div className="turn-helper">
+                <span className="turn-helper__copy">Draw Rune Tile → Adds 1 ability card to your hand</span>
+                <span className="turn-helper__tooltip">
+                  <button type="button" className="turn-helper__tooltip-trigger" aria-label="What are Rune Tiles?">
+                    ?
+                  </button>
+                  <span className="turn-helper__tooltip-bubble" role="tooltip">
+                    Rune Tiles are abilities you can play after moving
+                  </span>
+                </span>
+              </div>
+            ) : null}
+            {!isPaused && primaryAction.visible ? (
+              <button
+                type="button"
+                className="button button--forest button--wide"
+                disabled={primaryAction.disabled}
+                onClick={handlePrimaryAction}
+              >
+                {primaryAction.label}
+              </button>
             ) : null}
           </div>
         </footer>
       </div>
 
+      {drawFeedback ? (
+        <div
+          className={drawFeedback.active ? "draw-feedback-card draw-feedback-card--active" : "draw-feedback-card"}
+          aria-hidden="true"
+          style={
+            {
+              left: `${drawFeedback.startX}px`,
+              top: `${drawFeedback.startY}px`,
+              "--draw-feedback-dx": `${drawFeedback.deltaX}px`,
+              "--draw-feedback-dy": `${drawFeedback.deltaY}px`,
+            } as React.CSSProperties
+          }
+        >
+          <span className="draw-feedback-card__count">+{drawFeedback.count}</span>
+        </div>
+      ) : null}
+      {drawToast ? (
+        <div className="match-toast" role="status" aria-live="polite">
+          {drawToast.message}
+        </div>
+      ) : null}
+
       {showDiscardModal && (
         <div className="modal-overlay" onClick={() => setShowDiscardModal(false)} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(17, 32, 20, 0.85)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ background: "var(--forest-950)", border: "1px solid var(--forest-800)", padding: '24px', borderRadius: '12px', maxWidth: '80vw', maxHeight: '80vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ background: 'var(--forest-950)', border: '1px solid var(--forest-800)', padding: '24px', borderRadius: '12px', maxWidth: '80vw', maxHeight: '80vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <h2 style={{ margin: 0 }}>Discard Pile ({state.discardPile.length})</h2>
               <button type="button" className="text-link" onClick={() => setShowDiscardModal(false)} style={{ fontSize: '1.2rem', padding: '8px', cursor: 'pointer' }}>✕</button>
@@ -995,7 +1330,7 @@ export function MatchScreen({
                     <RuneTileCard tile={tile} copies={1} />
                   </div>
                 </div>
-              )) : <p style={{ color: "var(--forest-600)" }}>Discard pile is empty.</p>}
+              )) : <p style={{ color: 'var(--forest-600)' }}>Discard pile is empty.</p>}
             </div>
             <div style={{ marginTop: '32px', display: 'flex', justifyContent: 'flex-end' }}>
               <button type="button" className="button button--outline" onClick={() => setShowDiscardModal(false)}>Close</button>

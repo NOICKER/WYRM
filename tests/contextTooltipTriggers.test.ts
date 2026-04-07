@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { createInitialState, cloneState } from "../src/state/gameLogic.ts";
-import type { GameState, StepOption } from "../src/state/types.ts";
+import type { GameState, PlayerId, StepOption, WyrmId } from "../src/state/types.ts";
 import { getContextTooltipTriggers } from "../src/components/contextTooltipTriggerModel.ts";
 
 function createMoveTarget(row: number, col: number, capture = false): StepOption {
@@ -29,6 +29,39 @@ function createSnapshot(
     lairTile: overrides?.lairTile ?? null,
     viewerPlayerId: overrides?.viewerPlayerId ?? 1,
   };
+}
+
+function getPlayerWyrmIds(state: GameState, playerId: PlayerId): WyrmId[] {
+  return Object.values(state.wyrms)
+    .filter((wyrm) => wyrm.originalOwner === playerId)
+    .map((wyrm) => wyrm.id);
+}
+
+function clearBoardOccupants(state: GameState): void {
+  for (const row of state.board) {
+    for (const cell of row) {
+      cell.occupant = null;
+      cell.trail = null;
+      cell.hasWall = false;
+      cell.hasPowerRune = false;
+    }
+  }
+
+  for (const wyrm of Object.values(state.wyrms)) {
+    wyrm.position = null;
+    wyrm.status = "in_hoard";
+    wyrm.prevPosition = null;
+  }
+}
+
+function relocateWyrm(state: GameState, wyrmId: WyrmId, row: number, col: number): void {
+  const wyrm = state.wyrms[wyrmId];
+  if (wyrm.position) {
+    state.board[wyrm.position.row][wyrm.position.col].occupant = null;
+  }
+  wyrm.position = { row, col };
+  wyrm.status = "active";
+  state.board[row][col].occupant = wyrmId;
 }
 
 {
@@ -128,6 +161,61 @@ function createSnapshot(
     keys,
     [],
     "context tooltips should stay quiet when it is not the local player's turn",
+  );
+}
+
+{
+  const previous = createInitialState(2);
+  const current = createInitialState(2);
+  clearBoardOccupants(current);
+  current.phase = "move";
+  current.dieResult = 1;
+
+  const [blockedWyrm] = getPlayerWyrmIds(current, 1);
+  if (!blockedWyrm) {
+    throw new Error("expected a blocked wyrm");
+  }
+
+  relocateWyrm(current, blockedWyrm, 4, 4);
+  current.wyrms[blockedWyrm].prevPosition = { row: 4, col: 3 };
+  current.board[3][4].trail = {
+    owner: 2,
+    sourceWyrmId: "p4_w1",
+    placedRound: 1,
+    expiresAfterRound: 4,
+  };
+  current.board[5][4].hasWall = true;
+  current.board[4][5].hasWall = true;
+
+  const keys = getContextTooltipTriggers({
+    previous: createSnapshot(previous),
+    current: createSnapshot(current),
+    isLocalTurn: true,
+  });
+
+  assert.deepEqual(
+    keys,
+    ["blocked_move_available"],
+    "players should get a dedicated tooltip when their only legal resolution is the forced blocked-move trail placement",
+  );
+}
+
+{
+  const previous = createInitialState(2);
+  const current = cloneState(previous);
+  current.phase = "play_tile";
+  current.turnEffects.mainMoveCompleted = true;
+
+  const keys = getContextTooltipTriggers({
+    previous: createSnapshot(previous),
+    current: createSnapshot(current, { hoardChoicesCount: 2 }),
+    isLocalTurn: true,
+  });
+
+  assert.deepEqual(
+    keys,
+    [],
+    "deploy tooltips should stay quiet once the main move is already spent for the turn",
   );
 }
 

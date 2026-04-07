@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   PLAYER_NAMES,
@@ -8,12 +8,17 @@ import {
   getControlledActiveWyrms,
   getCurrentPlayer,
   getDeployTargets,
-  getMoveProfile,
   getNextPathOptions,
   hasAnyLegalMove,
 } from "../state/gameLogic.ts";
 import { canEndTurnNow } from "../state/gameEngine.ts";
 import { useGame } from "../state/useGameState.tsx";
+import {
+  getMatchPhase,
+  getMatchInstruction,
+  hasHoardDeployOpportunity,
+  type TileDraft,
+} from "./matchInteractionModel.ts";
 import type {
   Coord,
   MoveMode,
@@ -28,18 +33,6 @@ interface MoveSelection {
   path: Coord[];
   moveMode: MoveMode;
 }
-
-export type TileDraft =
-  | { tile: "water"; mode: "single" }
-  | { tile: "wind"; mode: "single" }
-  | { tile: "serpent"; mode: "single" }
-  | { tile: "earth"; mode: "single" | "lair"; cells: Coord[] }
-  | { tile: "shadow"; mode: "single"; wyrmIds: WyrmId[] }
-  | { tile: "shadow"; mode: "lair"; wyrmId: WyrmId | null }
-  | { tile: "light"; mode: "single" | "lair" }
-  | { tile: "void"; mode: "single"; opponentId: PlayerId | null; cells: Coord[] }
-  | { tile: "void"; mode: "lair"; opponentId: PlayerId | null }
-  | { tile: "serpent"; mode: "lair" };
 
 function sameCoord(a: Coord, b: Coord): boolean {
   return a.row === b.row && a.col === b.col;
@@ -69,6 +62,7 @@ export function useMatchInteractions() {
   const [peekPlayerId, setPeekPlayerId] = useState<PlayerId | null>(null);
 
   const currentPlayer = getCurrentPlayer(state);
+  const phase = getMatchPhase(state);
   const activeControlledWyrms = getControlledActiveWyrms(state, currentPlayer.id);
   const preferredMoveMode =
     state.turnEffects.tempestRushRemaining.length === 0
@@ -82,13 +76,8 @@ export function useMatchInteractions() {
     setTileDraft(null);
     setDeployWyrmId(null);
     setTrailWyrmId(null);
+    setDiscardSelection([]);
   };
-
-  const selectedMoveProfile = useMemo(
-    () =>
-      selectedMove ? getMoveProfile(state, selectedMove.wyrmId, selectedMove.moveMode) : null,
-    [selectedMove, state],
-  );
 
   const moveTargets = useMemo(
     () =>
@@ -100,8 +89,7 @@ export function useMatchInteractions() {
 
   const canConfirmMove = Boolean(
     selectedMove &&
-      selectedMoveProfile &&
-      !selectedMoveProfile.exact &&
+      selectedMove.path.length > 1 &&
       canCommitPath(state, selectedMove.wyrmId, selectedMove.path, selectedMove.moveMode),
   );
 
@@ -191,13 +179,48 @@ export function useMatchInteractions() {
     return [];
   }, [selectedMove, state.wyrms, tileDraft]);
 
-  const canPlayTiles =
-    !state.turnEffects.tileActionUsed && (state.phase === "move" || state.phase === "play_tile");
+  const canPlayTiles = !state.turnEffects.tileActionUsed && phase === "tile";
   const canConfirmDiscard =
-    state.phase === "discard" && discardSelection.length === state.mustDiscard;
-  const canEndTurn = canEndTurnNow(state);
+    phase === "discard" && discardSelection.length === state.mustDiscard;
+  const canEndTurn = phase === "tile" && canEndTurnNow(state);
+  const canDeployFromHoard = hasHoardDeployOpportunity(state, currentPlayer.hoard.length);
+
+  useEffect(() => {
+    if (phase !== "discard" && discardSelection.length > 0) {
+      setDiscardSelection([]);
+    }
+
+    if (phase !== "tile" && tileDraft != null) {
+      setTileDraft(null);
+    }
+
+    if (phase !== "move") {
+      if (selectedMove != null) {
+        setSelectedMove(null);
+      }
+      if (deployWyrmId != null) {
+        setDeployWyrmId(null);
+      }
+      if (trailWyrmId != null) {
+        setTrailWyrmId(null);
+      }
+    }
+  }, [deployWyrmId, discardSelection.length, phase, selectedMove, tileDraft, trailWyrmId]);
+
+  useEffect(() => {
+    if (deployWyrmId == null) {
+      return;
+    }
+
+    if (!canDeployFromHoard || !currentPlayer.hoard.includes(deployWyrmId)) {
+      setDeployWyrmId(null);
+    }
+  }, [canDeployFromHoard, currentPlayer.hoard, deployWyrmId]);
 
   const startTileDraft = (tile: RuneTileType, mode: "single" | "lair") => {
+    if (phase !== "tile" || state.turnEffects.tileActionUsed) {
+      return;
+    }
     clearInteraction();
 
     const immediateRequest: TilePlayRequest | null =
@@ -253,14 +276,24 @@ export function useMatchInteractions() {
   };
 
   const toggleDiscard = (index: number) => {
+    if (phase !== "discard") {
+      return;
+    }
+
     setDiscardSelection((current) =>
       current.includes(index)
         ? current.filter((entry) => entry !== index)
-        : [...current, index].sort((a, b) => a - b),
+        : current.length >= state.mustDiscard
+          ? current
+          : [...current, index].sort((a, b) => a - b),
     );
   };
 
   const confirmDiscard = () => {
+    if (phase !== "discard" || discardSelection.length !== state.mustDiscard) {
+      return;
+    }
+
     const chosenTiles = discardSelection.map((index) => currentPlayer.hand[index]);
     discard(chosenTiles);
     setDiscardSelection([]);
@@ -334,6 +367,9 @@ export function useMatchInteractions() {
   };
 
   const prepareDeploy = (wyrmId: WyrmId) => {
+    if (!canDeployFromHoard) {
+      return;
+    }
     clearInteraction();
     setDeployWyrmId((current) => (current === wyrmId ? null : wyrmId));
   };
@@ -460,6 +496,10 @@ export function useMatchInteractions() {
   };
 
   const handleBoardClick = (coord: Coord) => {
+    if (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null) {
+      return;
+    }
+
     if (handleTileBoardClick(coord)) {
       return;
     }
@@ -507,20 +547,6 @@ export function useMatchInteractions() {
       }
 
       const nextPath = [...selectedMove.path, coord];
-      const nextProfile = getMoveProfile(state, selectedMove.wyrmId, selectedMove.moveMode);
-      const shouldAutoCommit =
-        option.capture ||
-        Boolean(
-          nextProfile?.exact &&
-            canCommitPath(state, selectedMove.wyrmId, nextPath, selectedMove.moveMode),
-        );
-
-      if (shouldAutoCommit) {
-        move(selectedMove.wyrmId, nextPath, selectedMove.moveMode);
-        setSelectedMove(null);
-        return;
-      }
-
       setSelectedMove({
         ...selectedMove,
         path: nextPath,
@@ -572,117 +598,54 @@ export function useMatchInteractions() {
     }
   };
 
-  const instruction = useMemo(() => {
-    if (tileDraft) {
-      switch (tileDraft.tile) {
-        case "water":
-          return "Choose one of your active wyrms to pass through a single trail this turn.";
-        case "wind":
-          return "Choose one of your active wyrms to gain +2 movement.";
-        case "earth":
-          return `Choose ${
-            tileDraft.mode === "lair" ? "three" : "one"
-          } empty cell${tileDraft.mode === "lair" ? "s" : ""} for Stone.`;
-        case "shadow":
-          if (tileDraft.mode === "single") {
-            return "Choose two of your on-board wyrms to swap with Eclipse.";
-          }
-          return tileDraft.wyrmId
-            ? "Choose an empty cell for Void Walk."
-            : "Choose a controlled wyrm on the board or from the hoard for Void Walk.";
-        case "light":
-          return "Choose an opponent to reveal or blind.";
-        case "void":
-          return tileDraft.mode === "single"
-            ? tileDraft.opponentId
-              ? "Pick up to three trail markers from that opponent, then confirm."
-              : "Choose which opponent's trails you want to erase."
-            : "Choose one player color to erase completely.";
-        case "serpent":
-          return tileDraft.mode === "single"
-            ? "Choose the wyrm whose trail should last five rounds."
-            : "Choose a non-Elder wyrm to promote instantly.";
-      }
-    }
-
-    if (deployWyrmId) {
-      return "Click an open Den cell to redeploy the selected hoarded wyrm.";
-    }
-
-    if (trailWyrmId) {
-      return "Choose an adjacent empty cell to place a trail marker instead of moving.";
-    }
-
-    if (selectedMove) {
-      return canConfirmMove
-        ? "This path is valid. Confirm it now or extend it if the move allows more spaces."
-        : "Build the path step by step. Click the previous path cell if you need to back up.";
-    }
-
-    if (state.phase === "discard") {
-      return `Select exactly ${state.mustDiscard} tile${
-        state.mustDiscard === 1 ? "" : "s"
-      } to discard back down to five.`;
-    }
-
-    if (state.phase === "draw") {
-      return "Draw from the Rune deck. Power Rune bonuses are applied automatically here.";
-    }
-
-    if (state.phase === "roll") {
-      return "Roll the Rune Die to set this turn's movement.";
-    }
-
-    if (state.phase === "move") {
-      if (state.dieResult === "coil" && !state.turnEffects.coilChoice) {
-        return "Choose a Coil option first: move 1, 2, 3, or place an extra trail.";
-      }
-      if (
-        state.turnEffects.tempestRushRemaining.length > 0 &&
-        !state.turnEffects.mainMoveCompleted
-      ) {
-        return "Choose a wyrm to start the main move, or switch to Tempest Rush first.";
-      }
-      if (state.turnEffects.tempestRushRemaining.length > 0) {
-        return "Your main move is done. Spend remaining Tempest Rush moves or end the turn.";
-      }
-      return "Select a wyrm on the board to start plotting its move path.";
-    }
-
-    if (state.phase === "play_tile") {
-      return "Play one tile for a tactical swing, or end the turn.";
-    }
-
-    if (state.phase === "game_over" && state.winner) {
-      return `Player ${state.winner} wins by ${
-        state.winType === "grove" ? "claiming the Sacred Grove" : "domination"
-      }.`;
-    }
-
-    return "WYRM is ready.";
-  }, [canConfirmMove, deployWyrmId, selectedMove, state, tileDraft, trailWyrmId]);
+  const instruction = useMemo(
+    () =>
+      getMatchInstruction({
+        state,
+        tileDraft,
+        deployWyrmId,
+        trailWyrmId,
+        hasSelectedMove: selectedMove != null,
+        canConfirmMove,
+        hoardChoicesCount: currentPlayer.hoard.length,
+      }),
+    [
+      canConfirmMove,
+      currentPlayer.hoard.length,
+      deployWyrmId,
+      selectedMove,
+      state,
+      tileDraft,
+      trailWyrmId,
+    ],
+  );
 
   const performPhasePrimaryAction = () => {
-    if (state.phase === "draw") {
+    if (phase === "draw") {
       draw();
       return;
     }
-    if (state.phase === "roll") {
+    if (phase === "roll") {
       roll();
       return;
     }
-    if (state.phase === "discard" && canConfirmDiscard) {
+    if (phase === "discard" && canConfirmDiscard) {
       confirmDiscard();
       return;
     }
-    if (canConfirmMove) {
+    if (phase === "move" && canConfirmMove) {
       confirmMove();
+      return;
+    }
+    if (phase === "tile" && canEndTurn) {
+      endTurn();
     }
   };
 
   return {
     game,
     state,
+    phase,
     currentPlayer,
     activeControlledWyrms,
     preferredMoveMode,
@@ -732,5 +695,6 @@ export function useMatchInteractions() {
         id: player.id,
         label: PLAYER_NAMES[player.id],
       })),
+    canDeployFromHoard,
   };
 }

@@ -27,6 +27,11 @@ import {
     "You have captured Wyrms. In the Move step, you can deploy one into your Den instead of moving.",
     "deploy tooltips should explain hoard redeployment",
   );
+  assert.equal(
+    CONTEXT_TOOLTIP_CONTENT.blocked_move_available.title,
+    "Blocked move",
+    "blocked-move tooltips should expose the expected heading copy",
+  );
 }
 
 {

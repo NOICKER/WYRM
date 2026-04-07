@@ -13,6 +13,7 @@ interface RuneTileCardProps {
   lairReady?: boolean;
   disabled?: boolean;
   className?: string;
+  onActivate?: () => void;
   onPlay?: () => void;
   onPlayLair?: () => void;
 }
@@ -25,6 +26,7 @@ export function RuneTileCard({
   lairReady = false,
   disabled = false,
   className,
+  onActivate,
   onPlay,
   onPlayLair,
 }: RuneTileCardProps): React.JSX.Element {
@@ -35,8 +37,15 @@ export function RuneTileCard({
   const expandTimeoutRef = useRef<number | null>(null);
   const copyCount = copies ?? 0;
   const unlockCount = Math.max(0, 3 - copyCount);
+  const isInteractive = !disabled && Boolean(onActivate);
 
-  const shellClasses = ["rune-card-shell", className].filter(Boolean).join(" ");
+  const shellClasses = [
+    "rune-card-shell",
+    isInteractive ? "rune-card-shell--interactive" : "",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const classes = [
     "rune-card",
     active ? "rune-card--active" : "",
@@ -120,15 +129,35 @@ export function RuneTileCard({
     "--rune-tooltip-arrow-left": `${tooltipPlacement.arrowLeft}px`,
   } as React.CSSProperties;
 
+  const handleActivate = () => {
+    if (!isInteractive) {
+      return;
+    }
+
+    onActivate?.();
+  };
+
   return (
     <article
       ref={shellRef}
       className={shellClasses}
-      onMouseEnter={() => scheduleExpand(400)}
+      role={isInteractive ? "button" : undefined}
+      tabIndex={isInteractive ? 0 : undefined}
+      aria-disabled={disabled ? true : undefined}
+      onMouseEnter={() => scheduleExpand(220)}
       onMouseLeave={collapseTooltip}
-      onTouchStart={() => scheduleExpand(500)}
+      onTouchStart={() => scheduleExpand(320)}
       onTouchEnd={collapseTooltip}
       onTouchCancel={collapseTooltip}
+      onClick={handleActivate}
+      onKeyDown={(event) => {
+        if (!isInteractive || (event.key !== "Enter" && event.key !== " ")) {
+          return;
+        }
+
+        event.preventDefault();
+        onActivate?.();
+      }}
     >
       {expanded ? (
         <div ref={tooltipRef} className="rune-card__tooltip" style={tooltipStyle}>
@@ -168,12 +197,28 @@ export function RuneTileCard({
         {(onPlay || onPlayLair) && (
           <div className="rune-card__actions">
             {onPlay ? (
-              <button type="button" className="rune-card__button rune-card__button--primary" disabled={disabled} onClick={onPlay}>
+              <button
+                type="button"
+                className="rune-card__button rune-card__button--primary"
+                disabled={disabled}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onPlay();
+                }}
+              >
                 Invoke
               </button>
             ) : null}
             {onPlayLair ? (
-              <button type="button" className="rune-card__button rune-card__button--ghost" disabled={disabled} onClick={onPlayLair}>
+              <button
+                type="button"
+                className="rune-card__button rune-card__button--ghost"
+                disabled={disabled}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onPlayLair();
+                }}
+              >
                 Lair x3
               </button>
             ) : null}

@@ -854,6 +854,7 @@ function AppShell(): React.JSX.Element {
             matchId={activeMatch.id}
             onNavigate={navigatePath}
             onAbandonMatch={handleAbandonMatch}
+            onOpenGuide={() => setGuideOpen(true)}
           />
         </OnlineGameProvider>
       );
@@ -866,6 +867,7 @@ function AppShell(): React.JSX.Element {
           matchId={activeMatch.id}
           onNavigate={navigatePath}
           onAbandonMatch={handleAbandonMatch}
+          onOpenGuide={() => setGuideOpen(true)}
         />
       );
     }
@@ -926,6 +928,7 @@ function AppShell(): React.JSX.Element {
             matchId={localMatchId}
             onNavigate={navigatePath}
             onAbandonMatch={() => navigate({ name: "lobby" })}
+            onOpenGuide={() => setGuideOpen(true)}
             localMode
             localPlayerNames={localPlayerConfig.playerNames}
             localPlayerBots={localPlayerConfig.playerBots}
@@ -1008,7 +1011,7 @@ function AppShell(): React.JSX.Element {
         onGoToLobby={handleConnectionBannerLobby}
       />
       <button
-        className="global-back-btn"
+        className={showGuestBanner ? "global-back-btn global-back-btn--guest-offset" : "global-back-btn"}
         onClick={navigateBack}
         aria-label="Go back"
         title="Go back"

@@ -6,6 +6,7 @@ export type TooltipKey =
   | "elder_promotion"
   | "lair_power_available"
   | "coil_choice"
+  | "blocked_move_available"
   | "capture_available"
   | "hoard_deploy_available";
 
@@ -23,6 +24,7 @@ function isTooltipKey(value: unknown): value is TooltipKey {
     || value === "elder_promotion"
     || value === "lair_power_available"
     || value === "coil_choice"
+    || value === "blocked_move_available"
     || value === "capture_available"
     || value === "hoard_deploy_available"
   );

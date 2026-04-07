@@ -26,6 +26,10 @@ export const CONTEXT_TOOLTIP_CONTENT: Record<TooltipKey, ContextTooltipContent> 
     title: "Coil choice",
     body: "The Coil face lets you choose your distance (1, 2, or 3 spaces) or place an extra trail marker instead of moving.",
   },
+  blocked_move_available: {
+    title: "Blocked move",
+    body: "That wyrm has no legal path. Select it and place one adjacent trail marker instead of moving.",
+  },
   capture_available: {
     title: "Capture available",
     body: "A red ring means you can capture that Wyrm by landing on it. Captured Wyrms go to your Hoard and can be redeployed later.",

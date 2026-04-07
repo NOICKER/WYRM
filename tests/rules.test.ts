@@ -4,7 +4,9 @@ import { createInitialState } from "../src/state/gameLogic.ts";
 import {
   actionDraw,
   actionDeploy,
+  actionEndTurn,
   actionMove,
+  actionPlaceCoilTrail,
   actionPlayTile,
   actionRoll,
   checkVictory,
@@ -44,6 +46,12 @@ function clearBoardOccupants(state: GameState): void {
 
 function setHand(state: GameState, playerIndex: number, hand: RuneTileType[]): void {
   state.players[playerIndex].hand = [...hand];
+}
+
+function primeTurnForForcedEnd(state: GameState): void {
+  state.phase = "play_tile";
+  state.turnEffects.mainMoveCompleted = true;
+  state.turnEffects.tempestRushRemaining = [];
 }
 
 {
@@ -115,6 +123,58 @@ function setHand(state: GameState, playerIndex: number, hand: RuneTileType[]): v
 
 {
   const state = createInitialState(2);
+  state.phase = "move";
+  state.dieResult = 1;
+
+  const opponentWyrm = getPlayerWyrmIds(state, 4)[0];
+  if (!opponentWyrm) {
+    throw new Error("expected an opposing wyrm");
+  }
+
+  relocateWyrm(state, opponentWyrm, { row: 4, col: 4 });
+  const rejected = actionMove(state, opponentWyrm, [
+    { row: 4, col: 4 },
+    { row: 4, col: 5 },
+  ]);
+
+  assert.equal(
+    rejected.error,
+    "You can only move wyrms controlled by the active player.",
+    "players should not be able to move an opposing player's wyrm on their turn",
+  );
+}
+
+{
+  const state = createInitialState(2);
+  clearBoardOccupants(state);
+
+  const [blockedWyrm] = getPlayerWyrmIds(state, 1);
+  if (!blockedWyrm) {
+    throw new Error("expected a blocked wyrm");
+  }
+
+  relocateWyrm(state, blockedWyrm, { row: 4, col: 4 });
+  state.wyrms[blockedWyrm].prevPosition = { row: 4, col: 3 };
+  state.board[3][4].trail = {
+    owner: 2,
+    sourceWyrmId: "p4_w1",
+    placedRound: 1,
+    expiresAfterRound: 4,
+  };
+  state.board[5][4].hasWall = true;
+  state.board[4][5].hasWall = true;
+  state.phase = "draw";
+
+  const rejected = actionPlaceCoilTrail(state, blockedWyrm, { row: 4, col: 3 });
+  assert.equal(
+    rejected.error,
+    "Extra trail placement is only available for Coil or a forced blocked move during the move step.",
+    "blocked-move trail placement should be rejected outside the move step",
+  );
+}
+
+{
+  const state = createInitialState(2);
   state.phase = "play_tile";
   setHand(state, 0, ["serpent"]);
 
@@ -151,6 +211,75 @@ function setHand(state: GameState, playerIndex: number, hand: RuneTileType[]): v
 
 {
   const state = createInitialState(2);
+  state.phase = "move";
+  setHand(state, 0, ["fire"]);
+
+  const rejected = actionPlayTile(state, {
+    mode: "single",
+    tile: "fire",
+  });
+
+  assert.equal(
+    rejected.error,
+    "Rune tiles can only be played during the tile step.",
+    "tile effects should stay locked until the turn reaches the tile step",
+  );
+}
+
+{
+  const state = createInitialState(2);
+  state.phase = "play_tile";
+
+  const activeWyrm = getPlayerWyrmIds(state, 1)[0];
+  if (!activeWyrm) {
+    throw new Error("expected an active wyrm");
+  }
+
+  const currentPosition = state.wyrms[activeWyrm].position;
+  if (!currentPosition) {
+    throw new Error("expected the active wyrm to be on the board");
+  }
+
+  const rejected = actionMove(state, activeWyrm, [
+    currentPosition,
+    { row: currentPosition.row, col: currentPosition.col + 1 },
+  ]);
+
+  assert.equal(
+    rejected.error,
+    "Movement is only available during the move step.",
+    "board movement should stay locked once the turn reaches the tile step",
+  );
+}
+
+{
+  const state = createInitialState(2);
+  state.phase = "play_tile";
+
+  const capturedId = getPlayerWyrmIds(state, 4)[0];
+  if (!capturedId) {
+    throw new Error("expected a hoarded wyrm");
+  }
+
+  state.players[0].hoard = [capturedId];
+  const captured = state.wyrms[capturedId];
+  if (captured.position) {
+    state.board[captured.position.row][captured.position.col].occupant = null;
+  }
+  captured.position = null;
+  captured.status = "in_hoard";
+  captured.currentOwner = 1;
+
+  const rejected = actionDeploy(state, capturedId, { row: 1, col: 1 });
+  assert.equal(
+    rejected.error,
+    "Deploy is only available during the move step.",
+    "hoard deployment should remain part of the move step instead of leaking into the tile step",
+  );
+}
+
+{
+  const state = createInitialState(2);
   clearBoardOccupants(state);
 
   const [firstWyrm, secondWyrm] = getPlayerWyrmIds(state, 1);
@@ -182,6 +311,41 @@ function setHand(state: GameState, playerIndex: number, hand: RuneTileType[]): v
   } finally {
     Math.random = originalRandom;
   }
+}
+
+{
+  const state = createInitialState(2);
+  clearBoardOccupants(state);
+  state.phase = "move";
+  state.dieResult = 1;
+
+  const [mover] = getPlayerWyrmIds(state, 1);
+  if (!mover) {
+    throw new Error("expected a mover");
+  }
+
+  relocateWyrm(state, mover, { row: 4, col: 4 });
+  const moved = actionMove(state, mover, [
+    { row: 4, col: 4 },
+    { row: 4, col: 5 },
+  ]);
+
+  let advanced = moved;
+  for (let step = 0; step < 6; step += 1) {
+    primeTurnForForcedEnd(advanced);
+    advanced = actionEndTurn(advanced);
+  }
+
+  assert.equal(
+    advanced.currentRound,
+    4,
+    "the turn fast-forward helper should land at the start of round four",
+  );
+  assert.equal(
+    advanced.board[4][4].trail,
+    null,
+    "regular wyrm trails should be removed after three full rounds",
+  );
 }
 
 console.log("Rules test suite passed.");

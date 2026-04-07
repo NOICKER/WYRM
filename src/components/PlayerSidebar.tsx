@@ -11,13 +11,9 @@ import type { GameState, PlayerId, RuneTileType, WyrmId } from "../state/types.t
 
 interface PlayerSidebarProps {
   state: GameState;
-  discardSelection: number[];
   peekPlayerId: PlayerId | null;
   pendingDeployWyrmId: WyrmId | null;
-  canPlayTiles: boolean;
-  onToggleDiscard: (index: number) => void;
-  onPlaySingle: (tile: RuneTileType) => void;
-  onPlayLair: (tile: RuneTileType) => void;
+  canDeployFromHoard: boolean;
   onPrepareDeploy: (wyrmId: WyrmId) => void;
   onClosePeek: () => void;
 }
@@ -28,18 +24,13 @@ function countTile(hand: RuneTileType[], tile: RuneTileType): number {
 
 export function PlayerSidebar({
   state,
-  discardSelection,
   peekPlayerId,
   pendingDeployWyrmId,
-  canPlayTiles,
-  onToggleDiscard,
-  onPlaySingle,
-  onPlayLair,
+  canDeployFromHoard,
   onPrepareDeploy,
   onClosePeek,
 }: PlayerSidebarProps): React.JSX.Element {
   const activePlayer = state.players[state.currentPlayerIndex];
-  const discardMode = state.phase === "discard";
 
   return (
     <div className="sidebar-column">
@@ -55,50 +46,23 @@ export function PlayerSidebar({
           </div>
         </div>
 
-        {discardMode ? (
-          <div className="discard-grid">
-            {activePlayer.hand.map((tile, index) => (
-              <button
-                key={`${tile}-${index}`}
-                type="button"
-                className={discardSelection.includes(index) ? "tile-card selected" : "tile-card"}
-                onClick={() => onToggleDiscard(index)}
-              >
-                <strong>{TILE_LABELS[tile]}</strong>
-                <span>{TILE_HELP[tile]}</span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="tile-group-list">
-            {TILE_ORDER.filter((tile) => countTile(activePlayer.hand, tile) > 0).map((tile) => {
-              const copies = countTile(activePlayer.hand, tile);
-              const canLair = copies >= 3 && canPlayTiles;
-              return (
-                <div key={tile} className="tile-group-card">
-                  <div>
-                    <strong>{TILE_LABELS[tile]}</strong>
-                    <p>{TILE_HELP[tile]}</p>
-                  </div>
-                  <div className="tile-card-actions">
-                    <span className="tile-count">x{copies}</span>
-                    {canPlayTiles && (
-                      <button type="button" className="ghost-button" onClick={() => onPlaySingle(tile)}>
-                        Play
-                      </button>
-                    )}
-                    {canLair && (
-                      <button type="button" className="primary-inline-button" onClick={() => onPlayLair(tile)}>
-                        Lair x3
-                      </button>
-                    )}
-                  </div>
+        <div className="tile-group-list">
+          {TILE_ORDER.filter((tile) => countTile(activePlayer.hand, tile) > 0).map((tile) => {
+            const copies = countTile(activePlayer.hand, tile);
+            return (
+              <div key={tile} className="tile-group-card">
+                <div>
+                  <strong>{TILE_LABELS[tile]}</strong>
+                  <p>{TILE_HELP[tile]}</p>
                 </div>
-              );
-            })}
-            {activePlayer.hand.length === 0 && <p className="muted-line">No rune tiles in hand.</p>}
-          </div>
-        )}
+                <div className="tile-card-actions">
+                  <span className="tile-count">x{copies}</span>
+                </div>
+              </div>
+            );
+          })}
+          {activePlayer.hand.length === 0 && <p className="muted-line">No rune tiles in hand.</p>}
+        </div>
 
         <div className="hoard-strip">
           <div>
@@ -113,6 +77,7 @@ export function PlayerSidebar({
                   key={wyrmId}
                   type="button"
                   className={pendingDeployWyrmId === wyrmId ? "ghost-button active" : "ghost-button"}
+                  disabled={!canDeployFromHoard}
                   onClick={() => onPrepareDeploy(wyrmId)}
                 >
                   {wyrm.label}
@@ -121,6 +86,9 @@ export function PlayerSidebar({
               );
             })}
             {activePlayer.hoard.length === 0 && <span className="muted-line">Empty hoard</span>}
+            {activePlayer.hoard.length > 0 && !canDeployFromHoard ? (
+              <span className="muted-line">Deploy during the move step when your Den has an open cell.</span>
+            ) : null}
           </div>
         </div>
       </section>

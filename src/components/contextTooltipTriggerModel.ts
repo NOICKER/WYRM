@@ -1,5 +1,9 @@
 import type { RuneTileType, GameState, PlayerId, StepOption, Wyrm } from "../state/types.ts";
 import type { TooltipKey } from "../state/useTooltipState.ts";
+import {
+  hasBlockedMoveOpportunity,
+  hasHoardDeployOpportunity,
+} from "../ui/matchInteractionModel.ts";
 
 export interface ContextTooltipTriggerSnapshot {
   state: GameState;
@@ -41,10 +45,6 @@ function isCoilChoiceActive(state: GameState): boolean {
   return state.phase === "move" && state.dieResult === "coil" && state.turnEffects.coilChoice == null;
 }
 
-function hasHoardDeployOpportunity(snapshot: ContextTooltipTriggerSnapshot): boolean {
-  return snapshot.hoardChoicesCount > 0 && snapshot.state.phase === "move";
-}
-
 export function getContextTooltipTriggers({
   previous,
   current,
@@ -63,10 +63,14 @@ export function getContextTooltipTriggers({
   const previousLairTile = previous?.lairTile ?? null;
   const previousCoilChoiceActive = previous ? isCoilChoiceActive(previous.state) : false;
   const currentCoilChoiceActive = isCoilChoiceActive(current.state);
+  const previousBlockedMoveAvailable = previous ? hasBlockedMoveOpportunity(previous.state) : false;
+  const currentBlockedMoveAvailable = hasBlockedMoveOpportunity(current.state);
   const previousCaptureAvailable = previous?.moveTargets.some((option) => option.capture) ?? false;
   const currentCaptureAvailable = current.moveTargets.some((option) => option.capture);
-  const previousHoardDeployAvailable = previous ? hasHoardDeployOpportunity(previous) : false;
-  const currentHoardDeployAvailable = hasHoardDeployOpportunity(current);
+  const previousHoardDeployAvailable = previous
+    ? hasHoardDeployOpportunity(previous.state, previous.hoardChoicesCount)
+    : false;
+  const currentHoardDeployAvailable = hasHoardDeployOpportunity(current.state, current.hoardChoicesCount);
 
   const triggeredKeys: TooltipKey[] = [];
 
@@ -88,6 +92,10 @@ export function getContextTooltipTriggers({
 
   if (!previousCoilChoiceActive && currentCoilChoiceActive) {
     triggeredKeys.push("coil_choice");
+  }
+
+  if (!previousBlockedMoveAvailable && currentBlockedMoveAvailable) {
+    triggeredKeys.push("blocked_move_available");
   }
 
   if (!previousCaptureAvailable && currentCaptureAvailable) {
