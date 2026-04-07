@@ -11,7 +11,7 @@ import {
 import { createInitialState } from "../src/state/gameLogic.ts";
 import {
   getHandCardInteractionMode,
-  getMatchInstruction,
+  getMatchInstructionMeta,
   getMatchPhase,
   getPrimaryActionConfig,
   getVictoryOverlayCopy,
@@ -225,7 +225,7 @@ function clearBoardOccupants(state: GameState): void {
     "the deploy overlay should appear once a hoarded wyrm is intentionally selected",
   );
   assert.match(
-    getMatchInstruction({
+    getMatchInstructionMeta({
       state,
       tileDraft: null,
       deployWyrmId: null,
@@ -235,7 +235,7 @@ function clearBoardOccupants(state: GameState): void {
       hoardChoicesCount: state.players[0].hoard.length,
     }),
     /redeploy|Den/i,
-    "move-step guidance should tell the player when a hoard deploy is available",
+    "move-step meta copy should tell the player when a hoard deploy is available",
   );
 }
 
@@ -262,7 +262,7 @@ function clearBoardOccupants(state: GameState): void {
   state.board[4][5].hasWall = true;
 
   assert.match(
-    getMatchInstruction({
+    getMatchInstructionMeta({
       state,
       tileDraft: null,
       deployWyrmId: null,
@@ -272,7 +272,7 @@ function clearBoardOccupants(state: GameState): void {
       hoardChoicesCount: 0,
     }),
     /place a trail|legal move/i,
-    "blocked-move guidance should explain the forced trail placement instead of telling the player to plot a normal move",
+    "blocked-move meta copy should explain the forced trail placement instead of telling the player to plot a normal move",
   );
 }
 
@@ -323,7 +323,12 @@ function clearBoardOccupants(state: GameState): void {
   assert.equal(
     getHandCardInteractionMode({ phase: "move", isPaused: false, canPlayTiles: false }),
     "disabled",
-    "bottom cards should stay disabled during the move step so tiles cannot leak earlier in the turn",
+    "bottom cards should stay disabled during move turns when no pre-move tile is currently legal",
+  );
+  assert.equal(
+    getHandCardInteractionMode({ phase: "move", isPaused: false, canPlayTiles: true }),
+    "play",
+    "bottom cards should become playable during the move step when a pre-move rune like Flow or Gust is available",
   );
 }
 
@@ -358,6 +363,19 @@ function clearBoardOccupants(state: GameState): void {
     getPrimaryActionConfig({
       phase: "move",
       canConfirmDiscard: false,
+      canConfirmMove: false,
+      canSkipTile: false,
+      tileActionUsed: false,
+      hasTileSelection: false,
+      isPaused: false,
+    }),
+    { visible: false, label: "Confirm Move", disabled: true },
+    "move should hide the confirmation CTA until a valid path exists",
+  );
+  assert.deepEqual(
+    getPrimaryActionConfig({
+      phase: "move",
+      canConfirmDiscard: false,
       canConfirmMove: true,
       canSkipTile: false,
       tileActionUsed: false,
@@ -365,7 +383,7 @@ function clearBoardOccupants(state: GameState): void {
       isPaused: false,
     }),
     { visible: true, label: "Confirm Move", disabled: false },
-    "move should expose only the move confirmation CTA",
+    "move should expose the confirmation CTA once a valid path exists",
   );
   assert.deepEqual(
     getPrimaryActionConfig({

@@ -14,6 +14,7 @@ import {
   actionDeploy,
 } from "./gameEngine.ts";
 import { chooseBotAction, type BotDifficulty } from "./botEngine.ts";
+import { BOT_DECISION_DELAY_MS } from "../ui/matchMotion.ts";
 
 interface LocalGameProviderProps {
   children: React.ReactNode;
@@ -57,7 +58,7 @@ export function LocalGameProvider({ children, initialState, playerBots = {} }: L
         state.phase === "discard" ||
         state.phase === "roll" ||
         (state.dieResult === "coil" && state.turnEffects.coilChoice == null);
-      const delay = isQuickPhase ? 200 : 800;
+      const delay = isQuickPhase ? BOT_DECISION_DELAY_MS.quick : BOT_DECISION_DELAY_MS.standard;
 
       const timeout = setTimeout(() => {
         setState((current) => {

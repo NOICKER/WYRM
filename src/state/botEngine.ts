@@ -9,6 +9,7 @@ import {
   SACRED_GROVE_CELLS,
   sameCoord,
 } from "./gameLogic.ts";
+import { getMoveConsequenceSummary } from "./strategicAnalysis.ts";
 import type {
   Coord,
   GameState,
@@ -120,7 +121,7 @@ function scorePath(
 
   // Heavy bonus for captures
   if (cell.occupant && state.wyrms[cell.occupant]?.currentOwner !== state.wyrms[wyrmId]?.currentOwner) {
-    score += 200;
+    score += 260;
   }
 
   // Grove proximity bonus
@@ -143,6 +144,20 @@ function scorePath(
   // Mobility: prefer endpoints with more future options
   if (difficulty === "hardest") {
     score += mobilityAt(state, wyrmId, endpoint) * 8;
+  }
+
+  const consequenceSummary = getMoveConsequenceSummary(state, wyrmId, path);
+  if (consequenceSummary.immediateVictory) {
+    score += 1200;
+  }
+
+  score += consequenceSummary.futureCaptureThreats * 90;
+  score += consequenceSummary.groveReachableCount * 24;
+
+  if (consequenceSummary.deadEndRisk === "blocked") {
+    score -= 170;
+  } else if (consequenceSummary.deadEndRisk === "tight") {
+    score -= 48;
   }
 
   // Distance from own den center (prefer moving out)

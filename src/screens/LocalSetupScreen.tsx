@@ -34,7 +34,7 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
     const initialState = createInitialState(playerCount);
     // playerTypes is already keyed by real player IDs, so this is correct
     const playerBots = Object.entries(playerTypes).reduce((acc, [id, type]) => {
-      if (type !== "human") {
+      if (Number(id) !== 1 && type !== "human") {
         acc[Number(id)] = type as BotDifficulty;
       }
       return acc;
@@ -90,6 +90,7 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
             {activePlayerIds.map((playerId, i) => {
               const colorName = PLAYER_COLORS[i];
               const colorHex = PLAYER_PALETTE[colorName].base;
+              const selectedType = i === 0 ? "human" : playerTypes[playerId];
 
               return (
                 <div key={playerId} style={{ display: "flex", alignItems: "flex-start", gap: "1.5rem", backgroundColor: "white", padding: "1.5rem", borderRadius: "8px", border: "1px solid var(--color-ink-muted, #888)" }}>
@@ -103,7 +104,7 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
                         type="text"
                         value={playerNames[playerId]}
                         onChange={(e) => setPlayerNames(prev => ({ ...prev, [playerId]: e.target.value }))}
-                        disabled={playerTypes[playerId] !== "human"}
+                        disabled={selectedType !== "human"}
                         style={{
                           width: "100%",
                           padding: "0.75rem",
@@ -112,14 +113,15 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
                           borderRadius: "4px",
                           fontFamily: "var(--font-body)",
                           fontSize: "1rem",
-                          opacity: playerTypes[playerId] !== "human" ? 0.6 : 1,
+                          opacity: selectedType !== "human" ? 0.6 : 1,
                         }}
                       />
                     </label>
                     <label className="field" style={{ width: "140px", margin: 0 }}>
                       <span style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.875rem", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px" }}>Type</span>
                       <select
-                        value={playerTypes[playerId]}
+                        value={i === 0 ? "human" : playerTypes[playerId]}
+                        disabled={i === 0}
                         onChange={(e) => {
                           const type = e.target.value as "human" | BotDifficulty;
                           setPlayerTypes(prev => ({ ...prev, [playerId]: type }));

@@ -103,12 +103,9 @@ function createSeedRecord(
     conquest: 2 + sessionIndex,
     strategy: 4 + sessionIndex,
     groveControl: 56 + sessionIndex * 7,
-    factionRep: result === "win" ? "Ascendant" : "Watcher",
     sessionIndex,
     completedAt: Date.UTC(2026, 3, sessionIndex),
     flavorQuote: pickRotating(RESULT_QUOTES, sessionIndex),
-    xpEarned: 180 + sessionIndex * 22,
-    xpSources: ["Chronicle Logged", result === "win" ? "Sacred Grove Bonus" : "Field Notes"],
     events: [
       {
         id: `${id}-1`,
@@ -161,9 +158,10 @@ function AppShell(): React.JSX.Element {
   const [guideOpen, setGuideOpen] = useState(false);
   const [rooms, setRooms] = useState<Record<string, AssemblyRoom>>({});
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
-  const [activeMatch, setActiveMatch] = useState<ActiveMatchSession | null>(null);
+  const [activeMatchSession, setActiveMatchSession] = useState<ActiveMatchSession | null>(null);
   const [sessionCounter, setSessionCounter] = useState(4);
   const [guestBannerDismissed, setGuestBannerDismissed] = useState(false);
+  const [reconnectBannerVisible, setReconnectBannerVisible] = useState(false);
   const [lobbyIntent, setLobbyIntent] = useState<LobbyIntent>(null);
   const [preferences, setPreferences] = useState(() => readInitialSettingsPreferences());
   const [localPlayerConfig, setLocalPlayerConfig] = useState<{
@@ -177,6 +175,28 @@ function AppShell(): React.JSX.Element {
     "seed-3": createSeedRecord("seed-3", 3, "Sable Quill", "Sable Quill", "amber", "win"),
   }));
   const onlineSession = useOnlineSession(profile);
+  const {
+    clearActiveMatchContext,
+    clearError,
+    clearRouteError,
+    connectionBannerStatus,
+    connectionState,
+    error: onlineError,
+    joinRoom,
+    matchActionError,
+    matchView,
+    onlineRooms,
+    queueJoin,
+    queueJoinedAt,
+    queueLeave,
+    queueStatus,
+    reconnectAttemptCount,
+    retryReconnect,
+    roomAssignment,
+    routeError,
+    sendMatchAction,
+    watchRoom,
+  } = onlineSession;
 
   const completedList = useMemo(
     () => Object.values(completedMatches).sort((a, b) => b.sessionIndex - a.sessionIndex),
@@ -184,8 +204,45 @@ function AppShell(): React.JSX.Element {
   );
 
   const activeRoom = activeRoomId ? rooms[activeRoomId] ?? null : null;
+  const activeMatch = useMemo<ActiveMatchSession | null>(() => {
+    if (activeMatchSession && activeMatchSession.source === "local" && !activeMatchSession.completed) {
+      return activeMatchSession;
+    }
+
+    if (!matchView) {
+      return activeMatchSession;
+    }
+
+    const room =
+      rooms[matchView.roomId]
+      ?? onlineRooms[matchView.roomId]
+      ?? (activeMatchSession?.id === matchView.matchId ? activeMatchSession.room : null);
+
+    if (!room) {
+      return activeMatchSession;
+    }
+
+    if (activeMatchSession && activeMatchSession.id === matchView.matchId) {
+      return {
+        ...activeMatchSession,
+        roomId: matchView.roomId,
+        room,
+        source: "online",
+      };
+    }
+
+    return {
+      id: matchView.matchId,
+      roomId: matchView.roomId,
+      room,
+      source: "online",
+      events: [],
+      seenLogHead: null,
+      completed: false,
+    };
+  }, [activeMatchSession, matchView, onlineRooms, rooms]);
   const activeMatchRoom = activeMatch
-    ? rooms[activeMatch.roomId] ?? onlineSession.onlineRooms[activeMatch.roomId] ?? activeMatch.room
+    ? rooms[activeMatch.roomId] ?? onlineRooms[activeMatch.roomId] ?? activeMatch.room
     : null;
   const activeMatchState = useMemo(() => {
     if (!activeMatch || activeMatch.completed) {
@@ -193,21 +250,20 @@ function AppShell(): React.JSX.Element {
     }
 
     if (activeMatch.source === "online") {
-      return onlineSession.matchView?.matchId === activeMatch.id ? onlineSession.matchView.state : null;
+      return matchView?.matchId === activeMatch.id ? matchView.state : null;
     }
 
     return game.state;
-  }, [activeMatch, game.state, onlineSession.matchView]);
+  }, [activeMatch, game.state, matchView]);
   const activeAssemblyRouteError = useMemo(() => {
     if (route.name !== "assembly") {
       return null;
     }
-    const routeError = onlineSession.routeError;
     if (!routeError || !("roomId" in routeError) || routeError.roomId !== route.roomId) {
       return null;
     }
     return routeError;
-  }, [onlineSession.routeError, route]);
+  }, [route, routeError]);
   const activeAssemblyErrorReason = useMemo(
     () => mapRouteErrorToScreenReason(activeAssemblyRouteError),
     [activeAssemblyRouteError],
@@ -258,28 +314,23 @@ function AppShell(): React.JSX.Element {
   const handleRoomErrorNavigate = useCallback(
     (href: string, options?: { autoCreateRoom?: boolean }) => {
       setLobbyIntent(options?.autoCreateRoom ? { type: "auto_create_room" } : null);
-      onlineSession.clearRouteError();
+      clearRouteError();
       navigatePath(href);
     },
-    [navigatePath, onlineSession.clearRouteError],
+    [clearRouteError, navigatePath],
   );
 
   const handleConnectionBannerLobby = useCallback(() => {
-    setActiveMatch(null);
+    setActiveMatchSession(null);
     setActiveRoomId(null);
     setPendingAction(null);
     setError(null);
     setLobbyIntent(null);
-    onlineSession.clearActiveMatchContext();
-    onlineSession.clearError();
-    onlineSession.clearRouteError();
+    clearActiveMatchContext();
+    clearError();
+    clearRouteError();
     navigate({ name: "lobby" });
-  }, [
-    navigate,
-    onlineSession.clearActiveMatchContext,
-    onlineSession.clearError,
-    onlineSession.clearRouteError,
-  ]);
+  }, [clearActiveMatchContext, clearError, clearRouteError, navigate]);
 
   const handleSaveDisplayName = useCallback((nextUsername: string) => {
     setProfile((current) => (current ? { ...current, username: nextUsername.trim() } : current));
@@ -308,7 +359,7 @@ function AppShell(): React.JSX.Element {
       const playerCount = Math.min(4, Math.max(2, occupiedSeats.length)) as 2 | 3 | 4;
       const matchId = `match-${Date.now().toString(36)}`;
       game.startNewGame(playerCount);
-      setActiveMatch({
+      setActiveMatchSession({
         id: matchId,
         roomId: room.id,
         room,
@@ -329,14 +380,31 @@ function AppShell(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (!onlineSession.roomAssignment?.roomId || route.name !== "matchmaking") {
+    try {
+      const reconnectToken = window.sessionStorage.getItem("wyrm_reconnect_token");
+      if (!reconnectToken) {
+        return undefined;
+      }
+
+      const timeout = window.setTimeout(() => {
+        setReconnectBannerVisible(true);
+      }, 0);
+
+      return () => window.clearTimeout(timeout);
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!roomAssignment?.roomId || route.name !== "matchmaking") {
       return;
     }
     const timeout = window.setTimeout(() => {
-      navigate({ name: "assembly", roomId: onlineSession.roomAssignment?.roomId ?? "" }, true);
+      navigate({ name: "assembly", roomId: roomAssignment?.roomId ?? "" }, true);
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [navigate, onlineSession.roomAssignment?.roomId, route.name]);
+  }, [navigate, roomAssignment?.roomId, route.name]);
 
   useEffect(() => {
     if (route.name !== "assembly") {
@@ -345,74 +413,31 @@ function AppShell(): React.JSX.Element {
     if (rooms[route.roomId] || activeAssemblyErrorReason) {
       return;
     }
-    onlineSession.watchRoom(route.roomId);
+    watchRoom(route.roomId);
     if (
-      onlineSession.roomAssignment?.roomId !== route.roomId
-      || !onlineSession.roomAssignment.joined
-      || onlineSession.matchView?.roomId !== route.roomId
+      roomAssignment?.roomId !== route.roomId
+      || !roomAssignment?.joined
+      || matchView?.roomId !== route.roomId
     ) {
-      onlineSession.joinRoom(route.roomId);
+      joinRoom(route.roomId);
     }
   }, [
     activeAssemblyErrorReason,
-    onlineSession.joinRoom,
-    onlineSession.matchView?.roomId,
-    onlineSession.roomAssignment?.joined,
-    onlineSession.roomAssignment?.roomId,
-    onlineSession.watchRoom,
+    joinRoom,
+    matchView?.roomId,
+    roomAssignment?.joined,
+    roomAssignment?.roomId,
     rooms,
     route,
+    watchRoom,
   ]);
 
   useEffect(() => {
-    const matchView = onlineSession.matchView;
     if (!matchView) {
       return;
     }
 
-    const room =
-      rooms[matchView.roomId]
-      ?? onlineSession.onlineRooms[matchView.roomId]
-      ?? (activeMatch?.id === matchView.matchId ? activeMatch.room : null);
-
-    if (!room) {
-      return;
-    }
-
-    setActiveMatch((current) => {
-      if (current && current.source === "local" && !current.completed) {
-        return current;
-      }
-
-      if (current && current.id === matchView.matchId) {
-        return {
-          ...current,
-          roomId: matchView.roomId,
-          room,
-          source: "online",
-          completed: false,
-        };
-      }
-
-      return {
-        id: matchView.matchId,
-        roomId: matchView.roomId,
-        room,
-        source: "online",
-        events: [],
-        seenLogHead: null,
-        completed: false,
-      };
-    });
-  }, [activeMatch?.id, activeMatch?.room, onlineSession.matchView, onlineSession.onlineRooms, rooms]);
-
-  useEffect(() => {
-    const matchView = onlineSession.matchView;
-    if (!matchView) {
-      return;
-    }
-
-    const room = rooms[matchView.roomId] ?? onlineSession.onlineRooms[matchView.roomId] ?? null;
+    const room = rooms[matchView.roomId] ?? onlineRooms[matchView.roomId] ?? null;
     if (!room) {
       return;
     }
@@ -425,17 +450,17 @@ function AppShell(): React.JSX.Element {
     }
 
     return undefined;
-  }, [navigate, onlineSession.matchView, onlineSession.onlineRooms, rooms, route]);
+  }, [matchView, navigate, onlineRooms, rooms, route]);
 
   useEffect(() => {
     if (route.name !== "matchmaking") {
       return;
     }
     const hasQueueContext =
-      onlineSession.queueStatus === "searching"
-      || onlineSession.queueStatus === "timed_out"
-      || Boolean(onlineSession.roomAssignment);
-    if (hasQueueContext || onlineSession.connectionState !== "ready") {
+      queueStatus === "searching"
+      || queueStatus === "timed_out"
+      || Boolean(roomAssignment);
+    if (hasQueueContext || connectionState !== "ready") {
       return;
     }
     const timeout = window.setTimeout(() => {
@@ -444,11 +469,11 @@ function AppShell(): React.JSX.Element {
     }, 0);
     return () => window.clearTimeout(timeout);
   }, [
+    connectionState,
     navigate,
-    onlineSession.connectionState,
-    onlineSession.queueStatus,
-    onlineSession.roomAssignment,
+    queueStatus,
     route.name,
+    roomAssignment,
   ]);
 
   useEffect(() => {
@@ -476,16 +501,17 @@ function AppShell(): React.JSX.Element {
       return;
     }
     const timeout = window.setTimeout(() => {
-      setActiveMatch((current) => {
-        if (!current || current.id !== activeMatch.id) {
+      setActiveMatchSession((current) => {
+        const base = current && current.id === activeMatch.id ? current : activeMatch;
+        if (!base || base.id !== activeMatch.id) {
           return current;
         }
         return {
-          ...current,
+          ...base,
           seenLogHead: newestLog,
           events: [
-            ...current.events,
-            buildChronicleEvent(newestLog, activeMatchState.currentRound, activeMatchRoom, current.events.length),
+            ...base.events,
+            buildChronicleEvent(newestLog, activeMatchState.currentRound, activeMatchRoom, base.events.length),
           ],
         };
       });
@@ -506,9 +532,13 @@ function AppShell(): React.JSX.Element {
     const timeout = window.setTimeout(() => {
       setCompletedMatches((current) => ({ ...current, [record.id]: record }));
       setSessionCounter((current) => current + 1);
-      setActiveMatch((current) => (current ? { ...current, completed: true } : current));
+      setActiveMatchSession((current) =>
+        current && current.id === activeMatch.id
+          ? { ...current, completed: true }
+          : { ...activeMatch, completed: true },
+      );
       if (activeMatch.source === "online") {
-        onlineSession.clearActiveMatchContext();
+        clearActiveMatchContext();
       }
       setPendingAction(null);
       navigate({ name: "results", matchId: record.id });
@@ -519,8 +549,8 @@ function AppShell(): React.JSX.Element {
     activeMatch,
     activeMatchRoom,
     activeMatchState,
+    clearActiveMatchContext,
     navigate,
-    onlineSession.clearActiveMatchContext,
     profile,
     sessionCounter,
   ]);
@@ -568,7 +598,7 @@ function AppShell(): React.JSX.Element {
     const roomId = activeMatch?.roomId ?? null;
     const activeSource = activeMatch?.source ?? null;
 
-    setActiveMatch((current) =>
+    setActiveMatchSession((current) =>
       current
         ? {
             ...current,
@@ -600,10 +630,10 @@ function AppShell(): React.JSX.Element {
 
     setPendingAction(null);
     if (activeSource === "online") {
-      onlineSession.clearActiveMatchContext();
+      clearActiveMatchContext();
     }
     navigate({ name: "lobby" });
-  }, [activeMatch?.roomId, activeMatch?.source, navigate, onlineSession.clearActiveMatchContext]);
+  }, [activeMatch?.roomId, activeMatch?.source, clearActiveMatchContext, navigate]);
 
   const currentRecord =
     route.name === "results" || route.name === "chronicle" ? completedMatches[route.matchId] : null;
@@ -619,15 +649,6 @@ function AppShell(): React.JSX.Element {
           pendingAction={pendingAction}
           error={error}
           onSubmit={(form) => handleAuth(form.username)}
-          onOAuth={(provider) => {
-            setPendingAction(provider === "google" ? "google" : "discord");
-            setError(null);
-            window.setTimeout(() => {
-              setProfile({ username: provider === "google" ? "Aether Archivist" : "Citadel Scribe", level: 9 });
-              setPendingAction(null);
-              navigate({ name: "lobby" }, true);
-            }, 280);
-          }}
           onGuestPlay={() => {
             setPendingAction("guest");
             setError(null);
@@ -655,8 +676,8 @@ function AppShell(): React.JSX.Element {
           onCreateAssembly={handleCreateAssembly}
           onFindOpponent={() => {
             setError(null);
-            onlineSession.clearError();
-            onlineSession.queueJoin();
+            clearError();
+            queueJoin();
             navigate({ name: "matchmaking" });
           }}
           onJoinAssembly={(code) => {
@@ -683,6 +704,7 @@ function AppShell(): React.JSX.Element {
     if (route.name === "settings") {
       return (
         <SettingsScreen
+          key={profile.username}
           profile={profile}
           matchHistory={completedList}
           animationsEnabled={preferences.animationsEnabled}
@@ -700,32 +722,32 @@ function AppShell(): React.JSX.Element {
 
     if (route.name === "matchmaking") {
       const status =
-        onlineSession.queueStatus === "timed_out"
+        queueStatus === "timed_out"
           ? "timed_out"
-          : onlineSession.error
+          : onlineError
             ? "offline"
             : "searching";
 
       return (
         <MatchmakingScreen
           status={status}
-          queueJoinedAt={onlineSession.queueJoinedAt}
+          queueJoinedAt={queueJoinedAt}
           error={
-            onlineSession.queueStatus === "timed_out"
+            queueStatus === "timed_out"
               ? "Try again or create a private room."
-              : onlineSession.error
+              : onlineError
           }
           onNavigate={navigatePath}
           onCancel={() => {
-            onlineSession.queueLeave();
+            queueLeave();
             navigate({ name: "lobby" });
           }}
           onRetry={() => {
-            onlineSession.clearError();
-            onlineSession.queueJoin();
+            clearError();
+            queueJoin();
           }}
           onBack={() => {
-            onlineSession.queueLeave();
+            queueLeave();
             navigate({ name: "lobby" });
           }}
         />
@@ -734,7 +756,7 @@ function AppShell(): React.JSX.Element {
 
     if (route.name === "assembly") {
       const localRoom = rooms[route.roomId];
-      const onlineRoom = onlineSession.onlineRooms[route.roomId];
+      const onlineRoom = onlineRooms[route.roomId];
       const room = localRoom ?? onlineRoom;
       if (!room && activeAssemblyErrorReason) {
         return <RoomErrorScreen reason={activeAssemblyErrorReason} onNavigate={handleRoomErrorNavigate} />;
@@ -755,7 +777,7 @@ function AppShell(): React.JSX.Element {
                 <p className="matchmaking-screen__subtext">
                   The relay is fetching the latest assembly state.
                 </p>
-                {onlineSession.error ? <ScreenError message={onlineSession.error} /> : null}
+                {onlineError ? <ScreenError message={onlineError} /> : null}
                 <div className="matchmaking-screen__actions">
                   <button type="button" className="text-link" onClick={() => navigate({ name: "lobby" })}>
                     Back to lobby
@@ -840,18 +862,19 @@ function AppShell(): React.JSX.Element {
       && activeMatch
       && activeMatch.id === route.matchId
       && activeMatch.source === "online"
-      && onlineSession.matchView
-      && onlineSession.matchView.matchId === route.matchId
+      && matchView
+      && matchView.matchId === route.matchId
     ) {
       return (
         <OnlineGameProvider
-          match={onlineSession.matchView}
-          actionError={onlineSession.matchActionError}
-          sendMatchAction={onlineSession.sendMatchAction}
+          match={matchView}
+          actionError={matchActionError}
+          sendMatchAction={sendMatchAction}
         >
           <MatchScreen
             room={activeMatchRoom ?? activeMatch.room}
             matchId={activeMatch.id}
+            animationsEnabled={preferences.animationsEnabled}
             onNavigate={navigatePath}
             onAbandonMatch={handleAbandonMatch}
             onOpenGuide={() => setGuideOpen(true)}
@@ -865,6 +888,7 @@ function AppShell(): React.JSX.Element {
         <MatchScreen
           room={activeMatchRoom ?? activeMatch.room}
           matchId={activeMatch.id}
+          animationsEnabled={preferences.animationsEnabled}
           onNavigate={navigatePath}
           onAbandonMatch={handleAbandonMatch}
           onOpenGuide={() => setGuideOpen(true)}
@@ -926,6 +950,7 @@ function AppShell(): React.JSX.Element {
           <MatchScreen
             room={localRoom}
             matchId={localMatchId}
+            animationsEnabled={preferences.animationsEnabled}
             onNavigate={navigatePath}
             onAbandonMatch={() => navigate({ name: "lobby" })}
             onOpenGuide={() => setGuideOpen(true)}
@@ -935,6 +960,9 @@ function AppShell(): React.JSX.Element {
           />
         </LocalGameProvider>
       );
+    } else if (route.name === "local_match") {
+      navigatePath("/local", true);
+      return null;
     }
 
     if (route.name === "results" && currentRecord) {
@@ -944,7 +972,7 @@ function AppShell(): React.JSX.Element {
           pendingAction={pendingAction}
           onNavigate={navigatePath}
           onCheckOpponent={async () => {
-            const room = onlineSession.onlineRooms[currentRecord.roomId] ?? rooms[currentRecord.roomId];
+            const room = onlineRooms[currentRecord.roomId] ?? rooms[currentRecord.roomId];
             if (!room) return false;
             if (room.matchStatus === "closed" || room.matchStatus === "paused_disconnected") return false;
             return room.seats.some(s => !s.currentUser && s.occupied);
@@ -997,7 +1025,9 @@ function AppShell(): React.JSX.Element {
   })();
 
   const showGuestBanner = profile?.isGuest && !guestBannerDismissed && !["auth", "landing"].includes(route.name);
-  const connectionBannerVisible = onlineSession.connectionBannerStatus !== "connected";
+  const showReconnectBanner = reconnectBannerVisible && profile && route.name === "lobby";
+  const showStickyNotice = showGuestBanner || showReconnectBanner;
+  const connectionBannerVisible = connectionBannerStatus !== "connected";
 
   return (
     <div
@@ -1005,13 +1035,13 @@ function AppShell(): React.JSX.Element {
       data-wyrm-animations={preferences.animationsEnabled ? "on" : "off"}
     >
       <ConnectionBanner
-        status={onlineSession.connectionBannerStatus}
-        attemptCount={onlineSession.reconnectAttemptCount}
-        onRetry={onlineSession.retryReconnect}
+        status={connectionBannerStatus}
+        attemptCount={reconnectAttemptCount}
+        onRetry={retryReconnect}
         onGoToLobby={handleConnectionBannerLobby}
       />
       <button
-        className={showGuestBanner ? "global-back-btn global-back-btn--guest-offset" : "global-back-btn"}
+        className={showStickyNotice ? "global-back-btn global-back-btn--guest-offset" : "global-back-btn"}
         onClick={navigateBack}
         aria-label="Go back"
         title="Go back"
@@ -1020,6 +1050,24 @@ function AppShell(): React.JSX.Element {
           <path d="M15 18l-6-6 6-6" />
         </svg>
       </button>
+      {showReconnectBanner ? (
+        <div className="reconnect-banner">
+          <span>You have an active match in progress.</span>
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                window.sessionStorage.removeItem("wyrm_reconnect_token");
+              } catch {
+                // Ignore storage failures and still hide the banner for the current session.
+              }
+              setReconnectBannerVisible(false);
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       {showGuestBanner ? (
         <div className="guest-banner">
           <span>Playing as guest — match history will not be saved.</span>

@@ -544,6 +544,48 @@ export function canCommitPath(
   return isPathValid(state, wyrmId, path, moveMode);
 }
 
+export function getLegalMoves(
+  state: GameState,
+  wyrmId: WyrmId,
+  moveMode: MoveMode = "main",
+): Coord[] {
+  const wyrm = state.wyrms[wyrmId];
+  const profile = getMoveProfile(state, wyrmId, moveMode);
+  if (!wyrm || !wyrm.position || !profile) {
+    return [];
+  }
+
+  const destinations = new Map<string, Coord>();
+
+  const search = (path: Coord[]): void => {
+    if (path.length > 1 && canCommitPath(state, wyrmId, path, moveMode)) {
+      const destination = path[path.length - 1];
+      destinations.set(coordKey(destination), destination);
+    }
+
+    if (path.length - 1 >= profile.maxSteps) {
+      return;
+    }
+
+    for (const option of getNextPathOptions(state, wyrmId, path, moveMode)) {
+      const nextPath = [...path, { row: option.row, col: option.col }];
+      if (option.capture) {
+        if (canCommitPath(state, wyrmId, nextPath, moveMode)) {
+          destinations.set(coordKey(nextPath[nextPath.length - 1]), nextPath[nextPath.length - 1]);
+        }
+        continue;
+      }
+      search(nextPath);
+    }
+  };
+
+  search([wyrm.position]);
+
+  return [...destinations.values()].sort((left, right) =>
+    left.row === right.row ? left.col - right.col : left.row - right.row,
+  );
+}
+
 export function getNextPathOptions(
   state: GameState,
   wyrmId: WyrmId,

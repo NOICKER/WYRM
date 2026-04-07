@@ -108,12 +108,9 @@ export interface MatchRecord {
   conquest: number;
   strategy: number;
   groveControl: number;
-  factionRep: string;
   sessionIndex: number;
   completedAt: number;
   flavorQuote: string;
-  xpEarned: number;
-  xpSources: [string, string];
   events: ChronicleEvent[];
   opponentStillConnected?: boolean;
 }
@@ -567,7 +564,6 @@ export function buildMatchRecord(
     (wyrm) => wyrm.position && (wyrm.position.row === 5 || wyrm.position.row === 6) && (wyrm.position.col === 5 || wyrm.position.col === 6),
   ).length;
   const groveControl = Math.min(100, 25 + groveOccupants * 18 + strategy * 4);
-  const xpEarned = 120 + strategy * 12 + (winnerId === localSeat.playerId ? 80 : 35);
 
   return {
     id: `session-${sessionIndex}`,
@@ -585,12 +581,9 @@ export function buildMatchRecord(
     conquest,
     strategy,
     groveControl,
-    factionRep: winnerId === localSeat.playerId ? "Ascendant" : "Watcher",
     sessionIndex,
     completedAt: Date.now(),
     flavorQuote: pickRotating(RESULT_QUOTES, sessionIndex),
-    xpEarned,
-    xpSources: ["Chronicle Logged", winnerId === localSeat.playerId ? "Sacred Grove Bonus" : "Field Notes"],
     events,
     opponentStillConnected: room.seats.some(seat => !seat.currentUser && seat.occupied),
   };

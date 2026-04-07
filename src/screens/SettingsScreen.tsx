@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 
 import { ScreenError } from "../components/ScreenError.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
@@ -113,11 +113,6 @@ export function SettingsScreen({
   });
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
-
-  useEffect(() => {
-    setDisplayName(profile.username);
-    setDisplayNameSaved(false);
-  }, [profile.username]);
 
   const canSaveDisplayName = useMemo(() => {
     const trimmed = displayName.trim();

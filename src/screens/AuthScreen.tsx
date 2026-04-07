@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { LoadingPulse } from "../components/LoadingPulse.tsx";
 import { ScreenError } from "../components/ScreenError.tsx";
@@ -10,7 +10,6 @@ interface AuthScreenProps {
   pendingAction: string | null;
   error: string | null;
   onSubmit: (form: AuthFormState) => void;
-  onOAuth: (provider: "google" | "discord") => void;
   onGuestPlay: () => void;
 }
 
@@ -19,19 +18,21 @@ export function AuthScreen({
   pendingAction,
   error,
   onSubmit,
-  onOAuth,
   onGuestPlay,
 }: AuthScreenProps): React.JSX.Element {
   const [form, setForm] = useState<AuthFormState>({ username: "", password: "" });
-  const [autoGuest, setAutoGuest] = useState(false);
+  const autoGuest = useMemo(
+    () => new URLSearchParams(window.location.search).get("guest") === "true",
+    [],
+  );
+  const guestTriggeredRef = useRef(false);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("guest") === "true") {
-      setAutoGuest(true);
+    if (autoGuest && !guestTriggeredRef.current) {
+      guestTriggeredRef.current = true;
       onGuestPlay();
     }
-  }, [onGuestPlay]);
+  }, [autoGuest, onGuestPlay]);
 
   const canSubmit = useMemo(
     () => form.username.trim().length > 1 && form.password.trim().length > 2,
@@ -112,29 +113,6 @@ export function AuthScreen({
           >
             Play as guest
           </button>
-
-          <div className="auth-divider">
-            <span>Or continue with</span>
-          </div>
-
-          <div className="auth-oauth">
-            <button
-              type="button"
-              className="button button--outline"
-              disabled={Boolean(pendingAction)}
-              onClick={() => onOAuth("google")}
-            >
-              {pendingAction === "google" ? <LoadingPulse label="Google" /> : "Google"}
-            </button>
-            <button
-              type="button"
-              className="button button--outline"
-              disabled={Boolean(pendingAction)}
-              onClick={() => onOAuth("discord")}
-            >
-              {pendingAction === "discord" ? <LoadingPulse label="Discord" /> : "Discord"}
-            </button>
-          </div>
         </form>
       </section>
 

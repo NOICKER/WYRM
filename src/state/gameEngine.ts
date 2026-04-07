@@ -71,6 +71,10 @@ function getTrailDuration(wyrm: Wyrm): number {
   return wyrm.serpentBoostTurnsRemaining > 0 ? 5 : 3;
 }
 
+function isDenCell(state: GameState, coord: Coord): boolean {
+  return state.board[coord.row][coord.col].type.startsWith("den_");
+}
+
 function removeTrailsByPredicate(
   state: GameState,
   predicate: (trailOwner: PlayerId, sourceWyrmId: WyrmId) => boolean,
@@ -119,18 +123,32 @@ function captureWyrm(state: GameState, capturedId: WyrmId, captorId: PlayerId): 
   captured.serpentBoostTurnsRemaining = 0;
 }
 
-function placeTrails(state: GameState, wyrm: Wyrm, path: Coord[]): void {
+export function placeTrails(state: GameState, wyrm: Wyrm, path: Coord[]): void {
   const duration = getTrailDuration(wyrm);
   for (const coord of path.slice(0, -1)) {
     if (isOwnDenCoord(wyrm.currentOwner, coord)) {
       continue;
     }
-    state.board[coord.row][coord.col].trail = {
+    const cell = state.board[coord.row][coord.col];
+    if (cell.trail) {
+      continue;
+    }
+    cell.trail = {
       owner: wyrm.currentOwner,
       sourceWyrmId: wyrm.id,
       placedRound: state.currentRound,
       expiresAfterRound: state.currentRound + duration,
     };
+  }
+}
+
+export function expireTrails(state: GameState): void {
+  for (const row of state.board) {
+    for (const cell of row) {
+      if (cell.trail && state.currentRound >= cell.trail.expiresAfterRound) {
+        cell.trail = null;
+      }
+    }
   }
 }
 
@@ -510,7 +528,21 @@ export function actionPlayTile(state: GameState, request: TilePlayRequest): Game
   const next = cloneState(state);
   clearTransientState(next);
 
-  if (next.phase !== "play_tile") {
+  if (
+    request.mode === "single"
+    && (request.tile === "water" || request.tile === "wind")
+    && next.phase === "play_tile"
+  ) {
+    return setError(next, "Flow and Gust must be played before moving during the move step.");
+  }
+
+  const preMoveRuneWindow =
+    next.phase === "move"
+    && !next.turnEffects.mainMoveCompleted
+    && request.mode === "single"
+    && (request.tile === "water" || request.tile === "wind");
+
+  if (next.phase !== "play_tile" && !preMoveRuneWindow) {
     return setError(next, "Rune tiles can only be played during the tile step.");
   }
 
@@ -589,10 +621,20 @@ export function actionPlayTile(state: GameState, request: TilePlayRequest): Game
           return setError(next, "Eclipse needs two wyrms to swap.");
         }
         const [firstId, secondId] = swapIds;
+        if (firstId === secondId) {
+          return setError(next, "Eclipse needs two different wyrms to swap.");
+        }
         const first = next.wyrms[firstId];
         const second = next.wyrms[secondId];
-        if (!first?.position || !second?.position || first.currentOwner !== player.id || second.currentOwner !== player.id) {
-          return setError(next, "Only your on-board wyrms can be swapped.");
+        if (
+          !first?.position
+          || !second?.position
+          || first.currentOwner !== player.id
+          || second.currentOwner !== player.id
+          || isDenCell(next, first.position)
+          || isDenCell(next, second.position)
+        ) {
+          return setError(next, "Eclipse can only swap your on-board wyrms outside every Den.");
         }
         commitCards();
         const firstPos = { ...first.position };
@@ -784,13 +826,7 @@ export function actionEndTurn(state: GameState): GameState {
     nextPlayerFound = true;
   }
 
-  for (const row of next.board) {
-    for (const cell of row) {
-      if (cell.trail && next.currentRound >= cell.trail.expiresAfterRound) {
-        cell.trail = null;
-      }
-    }
-  }
+  expireTrails(next);
 
   next.turnNumber += 1;
   next.phase = "draw";

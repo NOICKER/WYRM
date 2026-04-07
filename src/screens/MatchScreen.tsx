@@ -10,6 +10,13 @@ import {
   type ContextTooltipTriggerSnapshot,
 } from "../components/contextTooltipTriggerModel.ts";
 import { getControlledActiveWyrms } from "../state/gameLogic.ts";
+import {
+  findCommittedPathToDestination,
+  getMoveConsequenceSummary,
+  getProjectedReachableCells,
+  getProjectedReachableCellsFromPrefix,
+  type DeadEndRisk,
+} from "../state/strategicAnalysis.ts";
 import { PlayerSidebar } from "../components/PlayerSidebar.tsx";
 import { PassTheScreenOverlay } from "./PassTheScreenOverlay.tsx";
 import {
@@ -37,10 +44,15 @@ import {
 } from "../ui/appModel.ts";
 import {
   getHandCardInteractionMode,
+  getMatchInstructionMeta,
   getPrimaryActionConfig,
+  getRollFeedbackCopy,
+  getTileSelectionPreview,
+  getTileSelectionSuggestion,
   getVictoryOverlayCopy,
   shouldShowDeployOverlay,
 } from "../ui/matchInteractionModel.ts";
+import { MATCH_MOTION_MS, getResponsiveMotionMode } from "../ui/matchMotion.ts";
 import { useMatchInteractions } from "../ui/useMatchInteractions.ts";
 
 const LOCAL_PLAYER_COLORS: PlayerColor[] = ["purple", "coral", "teal", "amber"];
@@ -77,6 +89,7 @@ interface ToastState {
 interface MatchScreenProps {
   room: AssemblyRoom;
   matchId: string;
+  animationsEnabled: boolean;
   onNavigate: (href: string) => void;
   onAbandonMatch: () => void;
   onOpenGuide: () => void;
@@ -91,12 +104,25 @@ interface MatchBoardGridProps {
   state: GameState;
   selectedPath: Coord[];
   selectedWyrmId: string | null;
+  legalMoveTargets: Coord[];
   moveTargets: StepOption[];
+  projectedMoveTargets: Coord[];
   actionTargets: Coord[];
   markedTargets: Coord[];
+  freshTrailKeys: string[];
+  ghostMove: GhostMoveState | null;
   playerNames: Record<PlayerId, string>;
   disabled: boolean;
   onCellClick: (coord: Coord) => void;
+  onCellHover: (coord: Coord | null) => void;
+}
+
+interface GhostMoveState {
+  wyrmId: string;
+  originalOwner: PlayerId;
+  isElder: boolean;
+  path: Coord[];
+  stepIndex: number;
 }
 
 function coordMatches(coord: Coord, list: Coord[]): boolean {
@@ -107,12 +133,37 @@ function findMoveTarget(coord: Coord, moveTargets: StepOption[]): StepOption | u
   return moveTargets.find((entry) => entry.row === coord.row && entry.col === coord.col);
 }
 
+function getCoordKey(coord: Coord): string {
+  return `${coord.row},${coord.col}`;
+}
+
 function getColorValue(color: PlayerColor): string {
   return PLAYER_PALETTE[color].base;
 }
 
 function formatMinuteCount(minutes: number): string {
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+function describeDeadEndRisk(risk: DeadEndRisk): string {
+  switch (risk) {
+    case "blocked":
+      return "Likely dead end after landing.";
+    case "tight":
+      return "Tight lane after landing.";
+    default:
+      return "Open lanes remain after landing.";
+  }
+}
+
+function describeFuturePressure(captures: number, groveReachableCount: number): string {
+  if (captures > 0) {
+    return `Threatens ${captures} capture${captures === 1 ? "" : "s"} next turn.`;
+  }
+  if (groveReachableCount > 0) {
+    return `Keeps ${groveReachableCount} Sacred Grove lane${groveReachableCount === 1 ? "" : "s"} in reach.`;
+  }
+  return "Builds space without an immediate capture threat.";
 }
 
 function createTutorialBoundingBox(
@@ -173,14 +224,24 @@ function MatchBoardGrid({
   state,
   selectedPath,
   selectedWyrmId,
+  legalMoveTargets,
   moveTargets,
+  projectedMoveTargets,
   actionTargets,
   markedTargets,
+  freshTrailKeys,
+  ghostMove,
   playerNames,
   disabled,
   onCellClick,
+  onCellHover,
 }: MatchBoardGridProps): React.JSX.Element {
   const selectedStart = selectedPath[0];
+  const ghostCoord = ghostMove ? ghostMove.path[ghostMove.stepIndex] : null;
+  const activeGhostMove = ghostMove && ghostCoord ? ghostMove : null;
+  const ghostLeft = ghostCoord ? ghostCoord.col * (cellSize + 3) + cellSize / 2 - 14 : 0;
+  const ghostTop = ghostCoord ? ghostCoord.row * (cellSize + 3) + cellSize / 2 - 14 : 0;
+  const ghostEnd = activeGhostMove ? activeGhostMove.path[activeGhostMove.path.length - 1] : null;
 
   return (
     <div
@@ -195,6 +256,8 @@ function MatchBoardGrid({
         row.map((cell) => {
           const coord = { row: cell.row, col: cell.col };
           const moveTarget = findMoveTarget(coord, moveTargets);
+          const legalMoveTarget = coordMatches(coord, legalMoveTargets);
+          const projectedMoveTarget = coordMatches(coord, projectedMoveTargets);
           const inPath = coordMatches(coord, selectedPath);
           const actionTarget = coordMatches(coord, actionTargets);
           const markedTarget = coordMatches(coord, markedTargets);
@@ -214,7 +277,9 @@ function MatchBoardGrid({
               className={[
                 "match-board-cell",
                 `match-board-cell--${cell.type}`,
+                legalMoveTarget ? "match-board-cell--legal" : "",
                 moveTarget ? (moveTarget.capture ? "match-board-cell--capture" : "match-board-cell--move") : "",
+                projectedMoveTarget ? "match-board-cell--projected" : "",
                 actionTarget ? "match-board-cell--action" : "",
                 markedTarget ? "match-board-cell--marked" : "",
                 inPath ? "match-board-cell--path" : "",
@@ -226,12 +291,22 @@ function MatchBoardGrid({
                 .join(" ")}
               disabled={disabled}
               onClick={() => onCellClick(coord)}
+              onMouseEnter={() => onCellHover(coord)}
+              onMouseLeave={() => onCellHover(null)}
+              onFocus={() => onCellHover(coord)}
+              onBlur={() => onCellHover(null)}
             >
               {cell.hasPowerRune ? <span className="match-board-cell__rune">◆</span> : null}
               {cell.hasWall ? <span className="match-board-cell__wall">✕</span> : null}
               {cell.trail && state.currentRound <= cell.trail.expiresAfterRound ? (
                 <span
-                  className={`match-board-cell__trail match-board-cell__trail--${cell.trail.owner}`}
+                  className={[
+                    "match-board-cell__trail",
+                    `match-board-cell__trail--${cell.trail.owner}`,
+                    freshTrailKeys.includes(getCoordKey(coord)) ? "match-board-cell__trail--fresh" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   style={{ opacity: trailOpacity }}
                 >
                   {trailRoundsRemaining === 0 ? <span className="match-board-cell__trail-dot" /> : null}
@@ -246,6 +321,13 @@ function MatchBoardGrid({
                     wyrm.currentOwner !== wyrm.originalOwner ? `match-board-cell__token-control--${wyrm.currentOwner}` : "",
                     wyrm.isElder ? "match-board-cell__token--elder" : "",
                     selectedWyrm ? "match-board-cell__token--selected" : "",
+                    activeGhostMove
+                    && wyrm.id === activeGhostMove.wyrmId
+                    && ghostEnd
+                    && ghostEnd.row === coord.row
+                    && ghostEnd.col === coord.col
+                      ? "match-board-cell__token--arrival-pending"
+                      : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
@@ -257,6 +339,21 @@ function MatchBoardGrid({
           );
         }),
       )}
+      {activeGhostMove ? (
+        <span
+          className={[
+            "match-board-grid__ghost-token",
+            `match-board-cell__token--${activeGhostMove.originalOwner}`,
+            activeGhostMove.isElder ? "match-board-cell__token--elder" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          style={{ left: `${ghostLeft}px`, top: `${ghostTop}px` }}
+          aria-hidden="true"
+        >
+          {activeGhostMove.isElder ? "✦" : getPlayerInitial(playerNames[activeGhostMove.originalOwner])}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -264,6 +361,7 @@ function MatchBoardGrid({
 export function MatchScreen({
   room,
   matchId,
+  animationsEnabled,
   onNavigate,
   onAbandonMatch,
   onOpenGuide,
@@ -286,6 +384,7 @@ export function MatchScreen({
     discardSelection,
     peekPlayerId,
     instruction,
+    legalMoveTargets,
     moveTargets,
     actionTargets,
     markedTargets,
@@ -323,6 +422,9 @@ export function MatchScreen({
   const previousTooltipSnapshotRef = useRef<ContextTooltipTriggerSnapshot | null>(null);
   const previousTooltipEligibilityRef = useRef(false);
   const previousDrawSnapshotRef = useRef<{ phase: string; playerId: PlayerId; handLength: number } | null>(null);
+  const previousTrailSnapshotRef = useRef<Map<string, string>>(new Map());
+  const ghostMoveTimerIdsRef = useRef<number[]>([]);
+  const freshTrailTimerIdsRef = useRef<number[]>([]);
   const drawFeedbackTimerIdsRef = useRef<number[]>([]);
   const { activeTooltipKey, showTooltip, dismissTooltip } = useTooltipState();
   const [cellSize, setCellSize] = useState(48);
@@ -342,12 +444,29 @@ export function MatchScreen({
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [drawFeedback, setDrawFeedback] = useState<DrawFeedbackState | null>(null);
   const [drawToast, setDrawToast] = useState<ToastState | null>(null);
+  const [freshTrailKeys, setFreshTrailKeys] = useState<string[]>([]);
+  const [ghostMove, setGhostMove] = useState<GhostMoveState | null>(null);
+  const [hoveredBoardCoord, setHoveredBoardCoord] = useState<Coord | null>(null);
 
   const clearDrawFeedbackTimers = useCallback(() => {
     for (const timerId of drawFeedbackTimerIdsRef.current) {
       window.clearTimeout(timerId);
     }
     drawFeedbackTimerIdsRef.current = [];
+  }, []);
+
+  const clearGhostMoveTimers = useCallback(() => {
+    for (const timerId of ghostMoveTimerIdsRef.current) {
+      window.clearTimeout(timerId);
+    }
+    ghostMoveTimerIdsRef.current = [];
+  }, []);
+
+  const clearFreshTrailTimers = useCallback(() => {
+    for (const timerId of freshTrailTimerIdsRef.current) {
+      window.clearTimeout(timerId);
+    }
+    freshTrailTimerIdsRef.current = [];
   }, []);
 
   // In local mode, derive names and colours from localPlayerNames prop instead of room seats
@@ -412,6 +531,112 @@ export function MatchScreen({
   const victoryOverlayCopy = getVictoryOverlayCopy(state, playerNames);
   const victoryAccentColor = state.winner ? getColorValue(playerColors[state.winner]) : currentPlayerColor;
   const canRestartMatch = localMode || Boolean(onRestartMatch);
+  const instructionMeta = useMemo(
+    () =>
+      getMatchInstructionMeta({
+        state,
+        tileDraft,
+        deployWyrmId,
+        trailWyrmId,
+        hasSelectedMove: selectedMove != null,
+        canConfirmMove,
+        hoardChoicesCount: currentPlayer.hoard.length,
+      }),
+    [
+      canConfirmMove,
+      currentPlayer.hoard.length,
+      deployWyrmId,
+      selectedMove,
+      state,
+      tileDraft,
+      trailWyrmId,
+    ],
+  );
+  const rollFeedback = useMemo(() => getRollFeedbackCopy(state), [state]);
+  const tileSelectionPreview = useMemo(() => getTileSelectionPreview(tileDraft), [tileDraft]);
+  const tileSelectionSuggestion = useMemo(
+    () => getTileSelectionSuggestion(state, tileDraft),
+    [state, tileDraft],
+  );
+  const hasPendingMotion = Boolean(rollingFace || drawFeedback || ghostMove || freshTrailKeys.length > 0);
+  const motionMode = useMemo(
+    () => getResponsiveMotionMode({ animationsEnabled, hasPendingMotion }),
+    [animationsEnabled, hasPendingMotion],
+  );
+
+  const flushBoardMotion = useCallback(() => {
+    clearDrawFeedbackTimers();
+    clearGhostMoveTimers();
+    clearFreshTrailTimers();
+    setRollingFace(null);
+    setDrawFeedback(null);
+    setGhostMove(null);
+    setFreshTrailKeys([]);
+  }, [clearDrawFeedbackTimers, clearFreshTrailTimers, clearGhostMoveTimers]);
+
+  const hoveredCommittedPath = useMemo(() => {
+    if (!selectedMove || !hoveredBoardCoord) {
+      return null;
+    }
+
+    if (selectedMove.path.length === 1) {
+      if (!legalMoveTargets.some((coord) => coord.row === hoveredBoardCoord.row && coord.col === hoveredBoardCoord.col)) {
+        return null;
+      }
+
+      return findCommittedPathToDestination(
+        state,
+        selectedMove.wyrmId,
+        selectedMove.path,
+        hoveredBoardCoord,
+        selectedMove.moveMode,
+      );
+    }
+
+    const hoveredOption = moveTargets.find(
+      (entry) => entry.row === hoveredBoardCoord.row && entry.col === hoveredBoardCoord.col,
+    );
+    if (!hoveredOption?.terminal) {
+      return null;
+    }
+
+    return [...selectedMove.path, hoveredBoardCoord];
+  }, [hoveredBoardCoord, legalMoveTargets, moveTargets, selectedMove, state]);
+
+  const projectedMoveTargets = useMemo(() => {
+    if (!selectedMove) {
+      return [];
+    }
+
+    if (hoveredCommittedPath) {
+      return getProjectedReachableCells(
+        state,
+        selectedMove.wyrmId,
+        hoveredCommittedPath,
+        selectedMove.moveMode,
+      );
+    }
+
+    return getProjectedReachableCellsFromPrefix(
+      state,
+      selectedMove.wyrmId,
+      selectedMove.path,
+      selectedMove.moveMode,
+    );
+  }, [hoveredCommittedPath, selectedMove, state]);
+
+  const hoveredMoveSummary = useMemo(() => {
+    if (!selectedMove || !hoveredCommittedPath) {
+      return null;
+    }
+
+    return getMoveConsequenceSummary(
+      state,
+      selectedMove.wyrmId,
+      hoveredCommittedPath,
+      selectedMove.moveMode,
+    );
+  }, [hoveredCommittedPath, selectedMove, state]);
 
   // Show pass-the-screen overlay whenever the active player changes in local mode
   useEffect(() => {
@@ -465,6 +690,14 @@ export function MatchScreen({
     [clearDrawFeedbackTimers],
   );
 
+  useEffect(
+    () => () => {
+      clearGhostMoveTimers();
+      clearFreshTrailTimers();
+    },
+    [clearFreshTrailTimers, clearGhostMoveTimers],
+  );
+
   useEffect(() => {
     if (!isPaused) {
       return;
@@ -472,6 +705,7 @@ export function MatchScreen({
 
     clearInteraction();
     setPeekPlayerId(null);
+    setHoveredBoardCoord(null);
     setShowPassOverlay(false);
     // The pause state should always drop any in-progress board selection immediately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -698,6 +932,20 @@ export function MatchScreen({
           drawnCount === 1 ? "+1 Rune Tile added" : `+${drawnCount} Rune Tiles added`;
         setDrawToast({ id: feedbackId, message: toastMessage });
 
+        if (motionMode.skip) {
+          drawFeedbackTimerIdsRef.current.push(
+            window.setTimeout(() => {
+              setDrawToast((current) => (current?.id === feedbackId ? null : current));
+            }, 900),
+          );
+          previousDrawSnapshotRef.current = {
+            phase,
+            playerId: currentPlayer.id,
+            handLength: currentPlayer.hand.length,
+          };
+          return;
+        }
+
         const deckRect = deckCountRef.current?.getBoundingClientRect();
         const handRect =
           handCardsRef.current?.getBoundingClientRect()
@@ -725,19 +973,19 @@ export function MatchScreen({
               setDrawFeedback((current) =>
                 current?.id === feedbackId ? { ...current, active: true } : current,
               );
-            }, 16),
+            }, 12),
           );
           drawFeedbackTimerIdsRef.current.push(
             window.setTimeout(() => {
               setDrawFeedback((current) => (current?.id === feedbackId ? null : current));
-            }, 520),
+            }, MATCH_MOTION_MS.drawFeedback),
           );
         }
 
         drawFeedbackTimerIdsRef.current.push(
           window.setTimeout(() => {
             setDrawToast((current) => (current?.id === feedbackId ? null : current));
-          }, 1900),
+          }, 900),
         );
       }
     }
@@ -747,31 +995,130 @@ export function MatchScreen({
       playerId: currentPlayer.id,
       handLength: currentPlayer.hand.length,
     };
-  }, [clearDrawFeedbackTimers, currentPlayer.hand.length, currentPlayer.id, phase]);
+  }, [clearDrawFeedbackTimers, currentPlayer.hand.length, currentPlayer.id, motionMode.skip, phase]);
+
+  useEffect(() => {
+    const nextSnapshot = new Map<string, string>();
+    const freshKeys: string[] = [];
+
+    for (const row of state.board) {
+      for (const cell of row) {
+        if (!cell.trail || state.currentRound > cell.trail.expiresAfterRound) {
+          continue;
+        }
+
+        const key = getCoordKey(cell);
+        const signature = `${cell.trail.owner}:${cell.trail.sourceWyrmId}:${cell.trail.placedRound}:${cell.trail.expiresAfterRound}`;
+        nextSnapshot.set(key, signature);
+
+        if (previousTrailSnapshotRef.current.get(key) !== signature) {
+          freshKeys.push(key);
+        }
+      }
+    }
+
+    previousTrailSnapshotRef.current = nextSnapshot;
+    if (freshKeys.length === 0) {
+      return;
+    }
+
+    clearFreshTrailTimers();
+    setFreshTrailKeys(freshKeys);
+    if (motionMode.skip) {
+      return;
+    }
+    freshTrailTimerIdsRef.current.push(
+      window.setTimeout(() => {
+        setFreshTrailKeys([]);
+      }, MATCH_MOTION_MS.trailFresh),
+    );
+  }, [clearFreshTrailTimers, motionMode.skip, state.board, state.currentRound]);
+
+  const handleBoardCellClick = useCallback(
+    (coord: Coord) => {
+      if (motionMode.skip) {
+        flushBoardMotion();
+      }
+      setHoveredBoardCoord(null);
+      handleBoardClick(coord);
+    },
+    [flushBoardMotion, handleBoardClick, motionMode.skip],
+  );
 
   const handlePrimaryAction = () => {
+    if (motionMode.skip) {
+      flushBoardMotion();
+    }
+
     if (phase === "roll") {
+      if (motionMode.skip) {
+        onRoll();
+        return;
+      }
+
       const faces = ["1", "2", "3", "4", "∞", "5"];
       let step = 0;
       setRollingFace(faces[0]);
       const interval = window.setInterval(() => {
         step += 1;
         setRollingFace(faces[step % faces.length]);
-      }, 90);
+      }, Math.max(48, Math.floor(MATCH_MOTION_MS.roll / 4)));
       onRoll();
       window.setTimeout(() => {
         window.clearInterval(interval);
         setRollingFace(null);
-      }, 600);
+      }, MATCH_MOTION_MS.roll);
       return;
     }
+
+    if (phase === "move" && selectedMove && canConfirmMove) {
+      const wyrm = state.wyrms[selectedMove.wyrmId];
+      if (wyrm && !motionMode.skip) {
+        const path = selectedMove.path.map((coord) => ({ ...coord }));
+        clearGhostMoveTimers();
+        setGhostMove({
+          wyrmId: selectedMove.wyrmId,
+          originalOwner: wyrm.originalOwner,
+          isElder: wyrm.isElder,
+          path,
+          stepIndex: 0,
+        });
+
+        const stepCount = Math.max(1, path.length - 1);
+        const stepDuration = Math.max(36, Math.floor(MATCH_MOTION_MS.ghostTotal / stepCount));
+
+        for (let index = 1; index < path.length; index += 1) {
+          ghostMoveTimerIdsRef.current.push(
+            window.setTimeout(() => {
+              setGhostMove((current) =>
+                current?.wyrmId === selectedMove.wyrmId ? { ...current, stepIndex: index } : current,
+              );
+            }, index * stepDuration),
+          );
+        }
+
+        ghostMoveTimerIdsRef.current.push(
+          window.setTimeout(() => {
+            setGhostMove((current) =>
+              current?.wyrmId === selectedMove.wyrmId ? null : current,
+            );
+          }, Math.min(MATCH_MOTION_MS.ghostTotal, path.length * stepDuration)),
+        );
+      }
+    }
+
     performPhasePrimaryAction();
   };
 
   const handleRestartMatch = () => {
     clearDrawFeedbackTimers();
+    clearGhostMoveTimers();
+    clearFreshTrailTimers();
     setDrawFeedback(null);
     setDrawToast(null);
+    setGhostMove(null);
+    setFreshTrailKeys([]);
+    setHoveredBoardCoord(null);
     setShowDiscardModal(false);
     setShowSidebar(false);
     setShowPassOverlay(false);
@@ -951,10 +1298,57 @@ export function MatchScreen({
           {!isPaused && instruction && phase !== "end" ? (
             <div className="match-board-guidance" aria-live="polite">
               <p className="match-board-guidance__instruction">{instruction}</p>
-              {phase === "discard" ? (
+              {instructionMeta ? (
                 <p className="match-board-guidance__meta">
-                  Discard down to five tiles before you can roll.
+                  {instructionMeta}
                 </p>
+              ) : null}
+              {rollFeedback && (phase === "roll" || phase === "move") ? (
+                <div className="match-board-guidance__status">
+                  <span className="match-board-guidance__badge">
+                    {rollFeedback.valueLabel}
+                  </span>
+                  <span
+                    className={[
+                      "match-board-guidance__badge",
+                      "match-board-guidance__badge--accent",
+                      `match-board-guidance__badge--${rollFeedback.emphasis}`,
+                    ].join(" ")}
+                  >
+                    {rollFeedback.requirement}
+                  </span>
+                </div>
+              ) : null}
+              {tileSelectionPreview ? (
+                <div className="tile-selection-preview">
+                  <span className="tile-selection-preview__eyebrow">Selected Rune Tile</span>
+                  <strong className="tile-selection-preview__title">{tileSelectionPreview.title}</strong>
+                  <p className="tile-selection-preview__detail">{tileSelectionPreview.detail}</p>
+                  {tileSelectionSuggestion ? (
+                    <p className="tile-selection-preview__suggestion">{tileSelectionSuggestion}</p>
+                  ) : null}
+                </div>
+              ) : null}
+              {hoveredMoveSummary ? (
+                <div className="move-consequence-hint">
+                  <span className="move-consequence-hint__eyebrow">Hovered Move</span>
+                  <strong className="move-consequence-hint__title">
+                    {hoveredMoveSummary.immediateVictory ? "Immediate winning line" : "Short-term outlook"}
+                  </strong>
+                  <p className="move-consequence-hint__detail">
+                    {hoveredMoveSummary.immediateVictory
+                      ? "This path wins immediately if you commit it."
+                      : describeFuturePressure(
+                          hoveredMoveSummary.futureCaptureThreats,
+                          hoveredMoveSummary.groveReachableCount,
+                        )}
+                  </p>
+                  {!hoveredMoveSummary.immediateVictory ? (
+                    <p className="move-consequence-hint__detail">
+                      {describeDeadEndRisk(hoveredMoveSummary.deadEndRisk)}
+                    </p>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           ) : null}
@@ -966,7 +1360,16 @@ export function MatchScreen({
             {/* Floating clear selection */}
             {!isPaused && phase !== "end" && hasClearableInteraction ? (
               <div className="board-clear-action">
-                <button type="button" className="button button--ghost" onClick={clearInteraction}>Clear</button>
+                <button
+                  type="button"
+                  className="button button--ghost"
+                  onClick={() => {
+                    setHoveredBoardCoord(null);
+                    clearInteraction();
+                  }}
+                >
+                  Clear
+                </button>
               </div>
             ) : null}
 
@@ -1146,12 +1549,17 @@ export function MatchScreen({
                 state={state}
                 selectedPath={selectedPath}
                 selectedWyrmId={selectedWyrmId}
+                legalMoveTargets={legalMoveTargets}
                 moveTargets={moveTargets}
+                projectedMoveTargets={projectedMoveTargets}
                 actionTargets={actionTargets}
                 markedTargets={markedTargets}
+                freshTrailKeys={freshTrailKeys}
+                ghostMove={ghostMove}
                 playerNames={playerNames}
                 disabled={showVictoryOverlay || isPaused || (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null)}
-                onCellClick={handleBoardClick}
+                onCellClick={handleBoardCellClick}
+                onCellHover={setHoveredBoardCoord}
               />
             </div>
 

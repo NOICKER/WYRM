@@ -331,7 +331,9 @@ export function useOnlineSession(profile: UserProfile | null): OnlineSession {
     return socketRef.current;
   }, [clientId, handleServerMessage, handleStateChange, onlineProfile]);
 
-  ensureConnectedRef.current = ensureConnected;
+  useEffect(() => {
+    ensureConnectedRef.current = ensureConnected;
+  }, [ensureConnected]);
 
   useEffect(() => {
     if (!onlineProfile || !clientId) {

@@ -49,7 +49,7 @@ assert.doesNotMatch(
 
 assert.match(
   matchScreen,
-  /className=\"rune-card-shell--tray\"/,
+  /className="rune-card-shell--tray"/,
   "match tray cards should opt into the compact tray card styling",
 );
 

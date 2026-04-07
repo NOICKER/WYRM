@@ -1,14 +1,19 @@
 import {
   PLAYER_NAMES,
+  getAdjacentEmptyCells,
+  getControlledActiveWyrms,
   canResolveBlockedMove,
   getCurrentPlayer,
   getDeployTargets,
+  SACRED_GROVE_CELLS,
 } from "../state/gameLogic.ts";
 import type {
+  DieResult,
   GameState,
   PlayerId,
   WyrmId,
 } from "../state/types.ts";
+import { getTileName } from "./appModel.ts";
 
 export type Phase = "draw" | "discard" | "roll" | "move" | "tile" | "end";
 export type HandCardInteractionMode = "discard" | "play" | "disabled";
@@ -68,6 +73,69 @@ export interface PrimaryActionConfig {
 export interface VictoryOverlayCopy {
   title: string;
   detail: string;
+}
+
+export interface RollFeedbackCopy {
+  valueLabel: string;
+  requirement: string;
+  emphasis: "exact" | "choice" | "trail";
+}
+
+export interface TileSelectionPreview {
+  title: string;
+  detail: string;
+}
+
+function distanceToNearestGrove(coord: { row: number; col: number }): number {
+  return Math.min(
+    ...SACRED_GROVE_CELLS.map((cell) =>
+      Math.max(Math.abs(cell.row - coord.row), Math.abs(cell.col - coord.col)),
+    ),
+  );
+}
+
+function formatSpaces(count: number): string {
+  return `${count} space${count === 1 ? "" : "s"}`;
+}
+
+function getRollName(result: DieResult): string {
+  switch (result) {
+    case 1:
+      return "Step";
+    case 2:
+      return "Stride";
+    case 3:
+      return "Glide";
+    case 4:
+      return "Rush";
+    case "coil":
+      return "Coil";
+    case "surge":
+      return "Surge";
+  }
+}
+
+function getMoveRequirementInstruction(
+  state: Pick<GameState, "dieResult" | "turnEffects">,
+): string {
+  if (state.dieResult == null) {
+    return "Move a Wyrm";
+  }
+
+  if (state.dieResult === "coil") {
+    if (state.turnEffects.coilChoice == null) {
+      return "Choose your Coil move";
+    }
+
+    if (state.turnEffects.coilChoice === "extra_trail") {
+      return "Place an extra trail";
+    }
+
+    return `Move a Wyrm exactly ${formatSpaces(state.turnEffects.coilChoice)}`;
+  }
+
+  const spaces = state.dieResult === "surge" ? 5 : state.dieResult;
+  return `Move a Wyrm exactly ${formatSpaces(spaces)}`;
 }
 
 export function getMatchPhase(state: Pick<GameState, "phase">): Phase {
@@ -134,7 +202,7 @@ export function getHandCardInteractionMode({
     return "discard";
   }
 
-  if (phase === "tile" && canPlayTiles) {
+  if ((phase === "tile" || phase === "move") && canPlayTiles) {
     return "play";
   }
 
@@ -162,7 +230,7 @@ export function getPrimaryActionConfig({
     case "roll":
       return { visible: true, label: "Roll Dice", disabled: false };
     case "move":
-      return { visible: true, label: "Confirm Move", disabled: !canConfirmMove };
+      return { visible: canConfirmMove, label: "Confirm Move", disabled: !canConfirmMove };
     case "tile":
       if (tileActionUsed) {
         return { visible: true, label: "End Turn", disabled: !canSkipTile };
@@ -197,108 +265,37 @@ export function shouldShowDeployOverlay({
 
 export function getMatchInstruction({
   state,
-  tileDraft,
   deployWyrmId,
   trailWyrmId,
-  hasSelectedMove,
-  canConfirmMove,
-  hoardChoicesCount,
 }: MatchInstructionInput): string {
   const phase = getMatchPhase(state);
 
-  if (tileDraft) {
-    switch (tileDraft.tile) {
-      case "water":
-        return "Choose one of your active wyrms to pass through a single trail this turn.";
-      case "wind":
-        return "Choose one of your active wyrms to gain +2 movement.";
-      case "earth":
-        return `Choose ${
-          tileDraft.mode === "lair" ? "three" : "one"
-        } empty cell${tileDraft.mode === "lair" ? "s" : ""} for Stone.`;
-      case "shadow":
-        if (tileDraft.mode === "single") {
-          return "Choose two of your on-board wyrms to swap with Eclipse.";
-        }
-        return tileDraft.wyrmId
-          ? "Choose an empty cell for Void Walk."
-          : "Choose a controlled wyrm on the board or from the hoard for Void Walk.";
-      case "light":
-        return "Choose an opponent to reveal or blind.";
-      case "void":
-        return tileDraft.mode === "single"
-          ? tileDraft.opponentId
-            ? "Pick up to three trail markers from that opponent, then confirm."
-            : "Choose which opponent's trails you want to erase."
-          : "Choose one player color to erase completely.";
-      case "serpent":
-        return tileDraft.mode === "single"
-          ? "Choose the wyrm whose trail should last five rounds."
-          : "Choose a non-Elder wyrm to promote instantly.";
-    }
-  }
-
   if (deployWyrmId) {
-    return "Click an open Den cell to redeploy the selected hoarded wyrm.";
+    return "Place the hoarded Wyrm in your Den";
   }
 
   if (trailWyrmId) {
-    return "Choose an adjacent empty cell to place a trail marker instead of moving.";
-  }
-
-  if (hasSelectedMove) {
-    return canConfirmMove
-      ? "This path is valid. Confirm it now or extend it if the move allows more spaces."
-      : "Build the path step by step. Click the previous path cell if you need to back up.";
+    return "Place an extra trail";
   }
 
   if (phase === "discard") {
-    return `Select exactly ${state.mustDiscard} tile${
-      state.mustDiscard === 1 ? "" : "s"
-    } to discard back down to five.`;
+    return `Discard ${state.mustDiscard} Rune Tile${state.mustDiscard === 1 ? "" : "s"}`;
   }
 
   if (phase === "draw") {
-    return "Draw from the Rune deck. Power Rune bonuses are applied automatically here.";
+    return "Draw a Rune Tile";
   }
 
   if (phase === "roll") {
-    return "Roll the Rune Die to set this turn's movement.";
+    return "Roll the dice";
   }
 
   if (phase === "move") {
-    const deployAvailable = hasHoardDeployOpportunity(state, hoardChoicesCount);
-
-    if (state.dieResult === "coil" && !state.turnEffects.coilChoice) {
-      return deployAvailable
-        ? "Choose a Coil option first, or redeploy a hoarded wyrm into your Den instead of moving."
-        : "Choose a Coil option first: move 1, 2, 3, or place an extra trail.";
-    }
-
-    if (deployAvailable) {
-      return "You can redeploy a hoarded wyrm into an open Den cell instead of moving, or select a wyrm on the board to move.";
-    }
-
-    if (hasBlockedMoveOpportunity(state)) {
-      return "No wyrm can make a legal move. Select the boxed-in wyrm and place one adjacent trail instead.";
-    }
-
-    if (
-      state.turnEffects.tempestRushRemaining.length > 0
-      && !state.turnEffects.mainMoveCompleted
-    ) {
-      return "Choose a wyrm to start the main move, or switch to Tempest Rush first.";
-    }
-
-    if (state.turnEffects.tempestRushRemaining.length > 0) {
-      return "Your main move is done. Spend remaining Tempest Rush moves or end the turn.";
-    }
-
-    return "Select a wyrm on the board to start plotting its move path.";
+    return getMoveRequirementInstruction(state);
   }
 
   if (phase === "tile") {
-    return "Choose a rune tile from your hand, or skip the tile step.";
+    return "Play a Rune Tile or Skip";
   }
 
   if (phase === "end" && state.winner) {
@@ -308,4 +305,261 @@ export function getMatchInstruction({
   }
 
   return "WYRM is ready.";
+}
+
+export function getMatchInstructionMeta({
+  state,
+  tileDraft,
+  deployWyrmId,
+  trailWyrmId,
+  hasSelectedMove,
+  canConfirmMove,
+  hoardChoicesCount,
+}: MatchInstructionInput): string | null {
+  const phase = getMatchPhase(state);
+  const deployAvailable = hasHoardDeployOpportunity(state, hoardChoicesCount);
+
+  if (tileDraft) {
+    switch (tileDraft.tile) {
+      case "water":
+        return "Select one of your active Wyrms. It can pass through a single trail this turn.";
+      case "wind":
+        return "Select one of your active Wyrms. It gets +2 movement this turn.";
+      case "earth":
+        return `Choose ${tileDraft.mode === "lair" ? "three" : "one"} empty cell${
+          tileDraft.mode === "lair" ? "s" : ""
+        } to place Stone.`;
+      case "shadow":
+        return tileDraft.mode === "single"
+          ? "Choose two of your Wyrms to swap positions."
+          : tileDraft.wyrmId
+            ? "Choose any empty cell to teleport this Wyrm."
+            : "Choose a Wyrm on the board or in your hoard to teleport.";
+      case "light":
+        return "Choose which opponent should reveal their hand or be blinded.";
+      case "void":
+        return tileDraft.mode === "single"
+          ? tileDraft.opponentId
+            ? "Select up to 3 trail markers from that opponent."
+            : "Choose which opponent's trails you want to erase."
+          : "Choose one player color to erase completely.";
+      case "serpent":
+        return tileDraft.mode === "single"
+          ? "Choose the Wyrm whose trail should last longer."
+          : "Choose a non-Elder Wyrm to promote instantly.";
+      default:
+        return null;
+    }
+  }
+
+  if (deployWyrmId) {
+    return "Click an open Den cell to redeploy the selected hoarded Wyrm.";
+  }
+
+  if (trailWyrmId) {
+    return "Choose an adjacent empty cell to place the trail marker.";
+  }
+
+  if (hasSelectedMove) {
+    return canConfirmMove
+      ? "Selected Wyrm is highlighted. Confirm this path when you're ready."
+      : "Selected Wyrm is highlighted. Legal destinations glow on the board.";
+  }
+
+  if (phase === "discard") {
+    return "Discard down to five tiles before you can roll.";
+  }
+
+  if (phase === "draw") {
+    return "Adds 1 ability card to your hand. Power Rune bonuses apply automatically.";
+  }
+
+  if (phase === "move") {
+    if (state.dieResult === "coil" && state.turnEffects.coilChoice == null) {
+      return deployAvailable
+        ? "Choose 1, 2, or 3 spaces, or place an extra trail. You can also redeploy from the hoard."
+        : "Choose 1, 2, or 3 spaces, or place an extra trail.";
+    }
+
+    if (deployAvailable) {
+      return "An open Den can redeploy one hoarded Wyrm instead of making a normal move.";
+    }
+
+    if (hasBlockedMoveOpportunity(state)) {
+      return "No legal move exists. Select the boxed-in Wyrm to place one adjacent trail instead.";
+    }
+
+    if (
+      state.turnEffects.tempestRushRemaining.length > 0
+      && !state.turnEffects.mainMoveCompleted
+    ) {
+      return "Main and Tempest moves are available. Pick the Wyrm you want to move next.";
+    }
+
+    if (state.turnEffects.tempestRushRemaining.length > 0) {
+      return "Your main move is complete. Spend the remaining Tempest Rush moves or end the turn.";
+    }
+  }
+
+  if (phase === "tile") {
+    return "Select a Rune Tile to preview its effect, then play it or skip the step.";
+  }
+
+  return null;
+}
+
+export function getRollFeedbackCopy(
+  state: Pick<GameState, "dieResult" | "turnEffects">,
+): RollFeedbackCopy | null {
+  if (state.dieResult == null) {
+    return null;
+  }
+
+  if (state.dieResult === "coil") {
+    if (state.turnEffects.coilChoice == null) {
+      return {
+        valueLabel: "∞ - Coil",
+        requirement: "Choose 1, 2, or 3 spaces, or place an extra trail",
+        emphasis: "choice",
+      };
+    }
+
+    if (state.turnEffects.coilChoice === "extra_trail") {
+      return {
+        valueLabel: "∞ - Coil",
+        requirement: "Place an extra trail instead of moving",
+        emphasis: "trail",
+      };
+    }
+
+    return {
+      valueLabel: `∞ - Coil (${state.turnEffects.coilChoice})`,
+      requirement: `Move exactly ${formatSpaces(state.turnEffects.coilChoice)}`,
+      emphasis: "exact",
+    };
+  }
+
+  const spaces = state.dieResult === "surge" ? 5 : state.dieResult;
+  const value = state.dieResult === "surge" ? "5" : String(state.dieResult);
+  return {
+    valueLabel: `${value} - ${getRollName(state.dieResult)}`,
+    requirement: `Move exactly ${formatSpaces(spaces)}`,
+    emphasis: "exact",
+  };
+}
+
+export function getTileSelectionPreview(tileDraft: TileDraft | null): TileSelectionPreview | null {
+  if (!tileDraft) {
+    return null;
+  }
+
+  switch (tileDraft.tile) {
+    case "water":
+      return {
+        title: getTileName(tileDraft.tile),
+        detail: "Select one Wyrm. It may pass through one trail this turn.",
+      };
+    case "wind":
+      return {
+        title: getTileName(tileDraft.tile),
+        detail: "Select one Wyrm. It gains +2 movement this turn.",
+      };
+    case "earth":
+      return {
+        title: getTileName(tileDraft.tile),
+        detail:
+          tileDraft.mode === "lair"
+            ? "Pick 3 empty cells to place permanent wall tiles."
+            : "Pick 1 empty cell to place a permanent wall tile.",
+      };
+    case "shadow":
+      return {
+        title: getTileName(tileDraft.tile),
+        detail:
+          tileDraft.mode === "lair"
+            ? "Teleport one Wyrm to any empty cell."
+            : "Choose 2 of your Wyrms and swap their positions.",
+      };
+    case "light":
+      return {
+        title: getTileName(tileDraft.tile),
+        detail: "Choose one opponent to reveal or disrupt.",
+      };
+    case "void":
+      return {
+        title: getTileName(tileDraft.tile),
+        detail:
+          tileDraft.mode === "lair"
+            ? "Choose one player color and erase every trail of that color."
+            : "Pick one opponent, then remove up to 3 of their trail markers.",
+      };
+    case "serpent":
+      return {
+        title: getTileName(tileDraft.tile),
+        detail:
+          tileDraft.mode === "lair"
+            ? "Promote one non-Elder Wyrm instantly."
+            : "Choose one Wyrm to extend its trail and boost its next turn.",
+      };
+  }
+}
+
+export function getTileSelectionSuggestion(
+  state: GameState,
+  tileDraft: TileDraft | null,
+): string | null {
+  if (!tileDraft) {
+    return null;
+  }
+
+  const currentPlayer = getCurrentPlayer(state);
+  const activeWyrms = getControlledActiveWyrms(state, currentPlayer.id);
+  const hasTightLane = activeWyrms.some((wyrm) => getAdjacentEmptyCells(state, wyrm.id, false).length <= 1);
+  const adjacentTrailPressure = activeWyrms.some((wyrm) => {
+    if (!wyrm.position) {
+      return false;
+    }
+    const neighbors = [
+      { row: wyrm.position.row - 1, col: wyrm.position.col },
+      { row: wyrm.position.row + 1, col: wyrm.position.col },
+      { row: wyrm.position.row, col: wyrm.position.col - 1 },
+      { row: wyrm.position.row, col: wyrm.position.col + 1 },
+    ];
+    return neighbors.some((coord) => {
+      const cell = state.board[coord.row]?.[coord.col];
+      return Boolean(cell?.trail);
+    });
+  });
+  const ownTrailCount = state.board.flat().filter((cell) => cell.trail?.owner === currentPlayer.id).length;
+  const groveNearby = activeWyrms.some((wyrm) =>
+    wyrm.position ? distanceToNearestGrove(wyrm.position) <= 2 : false,
+  );
+
+  switch (tileDraft.tile) {
+    case "water":
+      if (hasTightLane || ownTrailCount >= 4 || adjacentTrailPressure) {
+        return "Good for escaping trails";
+      }
+      return "Helpful when one blocked lane is stopping your route";
+    case "wind":
+      if (groveNearby) {
+        return "Strong for a burst toward the Sacred Grove";
+      }
+      return "Great when one extra push unlocks a capture or center line";
+    case "shadow":
+      if (hasTightLane) {
+        return "Useful when trapped";
+      }
+      return "Strong for rescuing a stranded Wyrm";
+    case "earth":
+      return "Best for sealing off a lane before it collapses on you";
+    case "light":
+      return "Useful when you need quick information before committing";
+    case "void":
+      return "Best when enemy trails are choking the center lanes";
+    case "serpent":
+      return "Strong on the Wyrm you expect to keep pressuring next turn";
+    default:
+      return null;
+  }
 }

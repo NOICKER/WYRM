@@ -263,6 +263,8 @@ websocketServer.on("connection", (socket: WebSocket) => {
               broadcastStateSync(result.roomId);
             }
             return;
+          default:
+            return;
         }
       }
       default:

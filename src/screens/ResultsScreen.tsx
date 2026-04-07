@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useEffectEvent, useState } from "react";
 
 import { LoadingPulse } from "../components/LoadingPulse.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
@@ -21,14 +21,12 @@ export function ResultsScreen({
   pendingAction,
   onCheckOpponent,
 }: ResultsScreenProps): React.JSX.Element {
-  const [opponentConnected, setOpponentConnected] = React.useState(record.opponentStillConnected ?? true);
+  const [opponentConnected, setOpponentConnected] = useState(record.opponentStillConnected ?? true);
+  const runOpponentCheck = useEffectEvent(onCheckOpponent);
 
-  const checkRef = React.useRef(onCheckOpponent);
-  checkRef.current = onCheckOpponent;
-
-  React.useEffect(() => {
+  useEffect(() => {
     const timer = setTimeout(() => {
-      checkRef.current().then((stillConnected) => {
+      runOpponentCheck().then((stillConnected) => {
         if (!stillConnected) {
           setOpponentConnected(false);
         }
@@ -73,23 +71,9 @@ export function ResultsScreen({
             </div>
             <div>
               <span>↑</span>
-              <p>{record.factionRep}</p>
             </div>
           </article>
 
-          <article className="progress-card">
-            <div className="progress-card__header">
-              <strong>Level {Math.max(1, Math.ceil(record.xpEarned / 120))}</strong>
-              <span>{record.xpEarned} XP</span>
-            </div>
-            <div className="xp-bar">
-              <span style={{ width: `${Math.min(100, (record.xpEarned / 300) * 100)}%` }} />
-            </div>
-            <div className="progress-card__sources">
-              <span>{record.xpSources[0]}</span>
-              <span>{record.xpSources[1]}</span>
-            </div>
-          </article>
 
           <div className="results-actions">
             {opponentConnected ? (
