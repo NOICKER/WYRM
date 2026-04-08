@@ -246,6 +246,7 @@ function MatchBoardGrid({
   return (
     <div
       className="match-board-grid"
+      onMouseLeave={() => onCellHover(null)}
       style={
         {
           "--board-cell-size": `${cellSize}px`,
@@ -292,7 +293,6 @@ function MatchBoardGrid({
               disabled={disabled}
               onClick={() => onCellClick(coord)}
               onMouseEnter={() => onCellHover(coord)}
-              onMouseLeave={() => onCellHover(null)}
               onFocus={() => onCellHover(coord)}
               onBlur={() => onCellHover(null)}
             >
@@ -1034,6 +1034,8 @@ export function MatchScreen({
     );
   }, [clearFreshTrailTimers, motionMode.skip, state.board, state.currentRound]);
 
+  const hoverTimerRef = useRef<number | null>(null);
+
   const handleBoardCellClick = useCallback(
     (coord: Coord) => {
       if (motionMode.skip) {
@@ -1044,6 +1046,19 @@ export function MatchScreen({
     },
     [flushBoardMotion, handleBoardClick, motionMode.skip],
   );
+
+  const handleBoardCellHover = useCallback((coord: Coord | null) => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+    }
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoveredBoardCoord((prev) => {
+        if (prev === coord) return prev;
+        if (prev && coord && prev.row === coord.row && prev.col === coord.col) return prev;
+        return coord;
+      });
+    }, 40);
+  }, []);
 
   const handlePrimaryAction = () => {
     if (motionMode.skip) {
@@ -1297,38 +1312,6 @@ export function MatchScreen({
         <section className="match-body">
           {!isPaused && instruction && phase !== "end" ? (
             <div className="match-board-guidance" aria-live="polite">
-              <p className="match-board-guidance__instruction">{instruction}</p>
-              {instructionMeta ? (
-                <p className="match-board-guidance__meta">
-                  {instructionMeta}
-                </p>
-              ) : null}
-              {rollFeedback && (phase === "roll" || phase === "move") ? (
-                <div className="match-board-guidance__status">
-                  <span className="match-board-guidance__badge">
-                    {rollFeedback.valueLabel}
-                  </span>
-                  <span
-                    className={[
-                      "match-board-guidance__badge",
-                      "match-board-guidance__badge--accent",
-                      `match-board-guidance__badge--${rollFeedback.emphasis}`,
-                    ].join(" ")}
-                  >
-                    {rollFeedback.requirement}
-                  </span>
-                </div>
-              ) : null}
-              {tileSelectionPreview ? (
-                <div className="tile-selection-preview">
-                  <span className="tile-selection-preview__eyebrow">Selected Rune Tile</span>
-                  <strong className="tile-selection-preview__title">{tileSelectionPreview.title}</strong>
-                  <p className="tile-selection-preview__detail">{tileSelectionPreview.detail}</p>
-                  {tileSelectionSuggestion ? (
-                    <p className="tile-selection-preview__suggestion">{tileSelectionSuggestion}</p>
-                  ) : null}
-                </div>
-              ) : null}
               {hoveredMoveSummary ? (
                 <div className="move-consequence-hint">
                   <span className="move-consequence-hint__eyebrow">Hovered Move</span>
@@ -1349,7 +1332,41 @@ export function MatchScreen({
                     </p>
                   ) : null}
                 </div>
-              ) : null}
+              ) : tileSelectionPreview ? (
+                <div className="tile-selection-preview">
+                  <span className="tile-selection-preview__eyebrow">Selected Rune Tile</span>
+                  <strong className="tile-selection-preview__title">{tileSelectionPreview.title}</strong>
+                  <p className="tile-selection-preview__detail">{tileSelectionPreview.detail}</p>
+                  {tileSelectionSuggestion ? (
+                    <p className="tile-selection-preview__suggestion">{tileSelectionSuggestion}</p>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  <p className="match-board-guidance__instruction">{instruction}</p>
+                  {instructionMeta ? (
+                    <p className="match-board-guidance__meta">
+                      {instructionMeta}
+                    </p>
+                  ) : null}
+                  {rollFeedback && (phase === "roll" || phase === "move") ? (
+                    <div className="match-board-guidance__status">
+                      <span className="match-board-guidance__badge">
+                        {rollFeedback.valueLabel}
+                      </span>
+                      <span
+                        className={[
+                          "match-board-guidance__badge",
+                          "match-board-guidance__badge--accent",
+                          `match-board-guidance__badge--${rollFeedback.emphasis}`,
+                        ].join(" ")}
+                      >
+                        {rollFeedback.requirement}
+                      </span>
+                    </div>
+                  ) : null}
+                </>
+              )}
             </div>
           ) : null}
           <div
@@ -1396,7 +1413,7 @@ export function MatchScreen({
             ) : null}
 
             {/* Deck / Discard preview */}
-            <div className="deck-discard-preview" style={{ position: 'absolute', bottom: '3.5rem', right: '0.75rem', display: 'flex', gap: '0.5rem', zIndex: 7, pointerEvents: 'none' }}>
+            <div className="deck-discard-preview" style={{ position: 'absolute', bottom: '4.5rem', right: '0.75rem', display: 'flex', gap: '0.5rem', zIndex: 7, pointerEvents: 'none' }}>
               <div style={{ textAlign: 'center', pointerEvents: 'auto' }}>
                 <div ref={deckCountRef} style={{ width: '40px', height: '54px', background: 'var(--forest-800)', borderRadius: '4px', border: '2px solid rgba(240, 234, 214, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(17, 32, 20, 0.4)', color: 'var(--parchment-200)', fontSize: '0.8rem' }}>{state.deck.length}</div>
                 <span style={{ fontSize: '9px', textTransform: 'uppercase', color: 'var(--parchment-200)', fontWeight: 'bold', display: 'block', marginTop: '2px' }}>Deck</span>
@@ -1559,7 +1576,7 @@ export function MatchScreen({
                 playerNames={playerNames}
                 disabled={showVictoryOverlay || isPaused || (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null)}
                 onCellClick={handleBoardCellClick}
-                onCellHover={setHoveredBoardCoord}
+                onCellHover={handleBoardCellHover}
               />
             </div>
 
