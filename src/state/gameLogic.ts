@@ -461,22 +461,30 @@ export function getMoveProfile(
   };
 }
 
-export function isPathValid(
+export function validatePathReason(
   state: GameState,
   wyrmId: WyrmId,
   path: Coord[],
   moveMode: MoveMode = "main",
-): boolean {
+): { valid: boolean; reason?: string } {
   const wyrm = state.wyrms[wyrmId];
   const profile = getMoveProfile(state, wyrmId, moveMode);
 
-  if (!wyrm || !wyrm.position || !profile || path.length < 2 || !sameCoord(path[0], wyrm.position)) {
-    return false;
+  if (!wyrm || !wyrm.position) {
+    return { valid: false, reason: "Wyrm not found" };
+  }
+
+  if (!profile) {
+    return { valid: false, reason: "Wyrm cannot move right now" };
+  }
+
+  if (path.length < 2 || !sameCoord(path[0], wyrm.position)) {
+    return { valid: false, reason: "Path must start at Wyrm's position" };
   }
 
   const steps = path.length - 1;
   if (profile.exact ? steps !== profile.maxSteps : steps < profile.minSteps || steps > profile.maxSteps) {
-    return false;
+    return { valid: false, reason: `Must move exactly ${profile.maxSteps} spaces` };
   }
 
   const allowedDirections = getDirectionsForWyrm(wyrm);
@@ -486,53 +494,62 @@ export function isPathValid(
     const previous = path[index - 1];
     const current = path[index];
     if (!isInsideBoard(current)) {
-      return false;
+      return { valid: false, reason: "Path goes out of bounds" };
     }
 
     const delta = { row: current.row - previous.row, col: current.col - previous.col };
     const directionAllowed = allowedDirections.some((direction) => sameCoord(direction, delta));
     if (!directionAllowed) {
-      return false;
+      return { valid: false, reason: "Invalid direction" };
     }
 
     if (index === 1 && sameCoord(current, wyrm.prevPosition)) {
-      return false;
+      return { valid: false, reason: "Cannot move back to previous space" };
     }
 
     if (index > 1 && sameCoord(current, path[index - 2])) {
-      return false;
+      return { valid: false, reason: "Path cannot overlap itself" };
     }
 
     const cell = state.board[current.row][current.col];
     if (cell.hasWall) {
-      return false;
+      return { valid: false, reason: "Path blocked by wall" };
     }
 
     if (cell.trail && !profile.canIgnoreTrails) {
       trailEntries += 1;
       if (!profile.canPassThroughOneTrail || trailEntries > 1) {
-        return false;
+        return { valid: false, reason: "Path blocked by trail" };
       }
       if (index === path.length - 1 && !profile.canEndOnTrail) {
-        return false;
+        return { valid: false, reason: "Cannot end move on a trail" };
       }
     }
 
     if (cell.occupant) {
       const occupant = state.wyrms[cell.occupant];
       if (!occupant) {
-        return false;
+        return { valid: false, reason: "Cell occupied" };
       }
       if (occupant.currentOwner === wyrm.currentOwner) {
-        return false;
+        return { valid: false, reason: "Cell occupied by own Wyrm" };
       }
       if (index !== path.length - 1) {
-        return false;
+        return { valid: false, reason: "Cannot pass through opponent Wyrm" };
       }
     }
   }
 
-  return true;
+  return { valid: true };
+}
+
+export function isPathValid(
+  state: GameState,
+  wyrmId: WyrmId,
+  path: Coord[],
+  moveMode: MoveMode = "main",
+): boolean {
+  return validatePathReason(state, wyrmId, path, moveMode).valid;
 }
 
 export function canCommitPath(
@@ -676,6 +693,17 @@ export function hasAnyLegalMove(
   };
 
   return search([wyrm.position]);
+}
+
+export function getWyrmsWithLegalMoves(
+  state: GameState,
+  playerId: PlayerId,
+  moveMode: MoveMode = "main",
+): WyrmId[] {
+  const activeWyrms = getControlledActiveWyrms(state, playerId);
+  return activeWyrms
+    .filter((wyrm) => hasAnyLegalMove(state, wyrm.id, moveMode))
+    .map((wyrm) => wyrm.id);
 }
 
 export function getDeployTargets(state: GameState, playerId: PlayerId): Coord[] {

@@ -10,7 +10,9 @@ import {
   getDeployTargets,
   getLegalMoves,
   getNextPathOptions,
+  getWyrmsWithLegalMoves,
   hasAnyLegalMove,
+  validatePathReason,
 } from "../state/gameLogic.ts";
 import { canEndTurnNow } from "../state/gameEngine.ts";
 import { useGame } from "../state/useGameState.tsx";
@@ -61,12 +63,31 @@ export function useMatchInteractions() {
   const [rawTrailWyrmId, setRawTrailWyrmId] = useState<WyrmId | null>(null);
   const [rawDiscardSelection, setRawDiscardSelection] = useState<number[]>([]);
   const [peekPlayerId, setPeekPlayerId] = useState<PlayerId | null>(null);
+  const [interactionHint, setInteractionHint] = useState<string | null>(null);
 
   const currentPlayer = getCurrentPlayer(state);
   const phase = getMatchPhase(state);
   const activeControlledWyrms = getControlledActiveWyrms(state, currentPlayer.id);
   const preMoveTileWindow = phase === "move" && !state.turnEffects.mainMoveCompleted;
   const hasPreMoveRune = currentPlayer.hand.some((tile) => tile === "water" || tile === "wind");
+
+  // Compute which wyrms can move at the start of the move phase, to drive UI and block invalid clicks upfront
+  const movableWyrmIds = useMemo(() => {
+    if (phase !== "move" || state.turnEffects.mainMoveCompleted) return [];
+    const mainMovable = getWyrmsWithLegalMoves(state, currentPlayer.id, "main");
+    if (mainMovable.length > 0) return mainMovable;
+    // Fall back to tempest rush wyrms
+    return state.turnEffects.tempestRushRemaining.filter((id) =>
+      hasAnyLegalMove(state, id, "tempest")
+    );
+  }, [phase, state, currentPlayer.id]);
+
+  // True when in move phase, no wyrm can move, but a trail can be placed (blocked/coil)
+  const isAutoCoilState = useMemo(() => {
+    if (phase !== "move" || state.turnEffects.mainMoveCompleted) return false;
+    if (state.dieResult === "coil" && state.turnEffects.coilChoice == null) return false;
+    return movableWyrmIds.length === 0 && canResolveBlockedMove(state);
+  }, [movableWyrmIds, phase, state]);
   const tileCounts = currentPlayer.hand.reduce<Record<RuneTileType, number>>((counts, tile) => {
     counts[tile] = (counts[tile] ?? 0) + 1;
     return counts;
@@ -105,6 +126,7 @@ export function useMatchInteractions() {
     setRawDeployWyrmId(null);
     setRawTrailWyrmId(null);
     setRawDiscardSelection([]);
+    setInteractionHint(null);
   };
 
   const moveTargets = useMemo(
@@ -553,14 +575,30 @@ export function useMatchInteractions() {
           ...selectedMove,
           path: selectedMove.path.slice(0, -1),
         });
+        setInteractionHint(null);
         return;
       }
 
       if (!option) {
+        // Clicked own wyrm — only switch selection to it if it's movable
         if (occupant && occupant.currentOwner === currentPlayer.id && occupant.position) {
-          setRawSelectedMove(null);
+          if (movableWyrmIds.includes(occupant.id)) {
+            setRawSelectedMove(null);
+            setInteractionHint(null);
+          }
+          // Non-movable wyrm click: silently ignore, dim in UI already explains
         }
+        // Invalid cell click: silently ignore — no toast spam
         return;
+      }
+
+      // Valid step option — also run validatePathReason for edge-case hints
+      const candidatePath = [...selectedMove.path, coord];
+      const validation = validatePathReason(state, selectedMove.wyrmId, candidatePath, selectedMove.moveMode);
+      if (!validation.valid && validation.reason) {
+        setInteractionHint(validation.reason);
+      } else {
+        setInteractionHint(null);
       }
 
       const nextPath = [...selectedMove.path, coord];
@@ -591,6 +629,12 @@ export function useMatchInteractions() {
           path: [occupant.position],
           moveMode: "main",
         });
+        setInteractionHint(null);
+        return;
+      }
+
+      // Wyrm has no legal moves but other wyrms can move — silently ignore
+      if (!hasAnyLegalMove(state, occupant.id, "main") && movableWyrmIds.length > 0) {
         return;
       }
     }
@@ -604,6 +648,7 @@ export function useMatchInteractions() {
         path: [occupant.position],
         moveMode: "tempest",
       });
+      setInteractionHint(null);
       return;
     }
 
@@ -714,5 +759,8 @@ export function useMatchInteractions() {
         label: PLAYER_NAMES[player.id],
       })),
     canDeployFromHoard,
+    movableWyrmIds,
+    isAutoCoilState,
+    interactionHint,
   };
 }

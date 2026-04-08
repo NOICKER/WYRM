@@ -113,6 +113,7 @@ interface MatchBoardGridProps {
   ghostMove: GhostMoveState | null;
   playerNames: Record<PlayerId, string>;
   disabled: boolean;
+  movableWyrmIds: string[];
   onCellClick: (coord: Coord) => void;
   onCellHover: (coord: Coord | null) => void;
 }
@@ -233,6 +234,7 @@ function MatchBoardGrid({
   ghostMove,
   playerNames,
   disabled,
+  movableWyrmIds,
   onCellClick,
   onCellHover,
 }: MatchBoardGridProps): React.JSX.Element {
@@ -321,6 +323,10 @@ function MatchBoardGrid({
                     wyrm.currentOwner !== wyrm.originalOwner ? `match-board-cell__token-control--${wyrm.currentOwner}` : "",
                     wyrm.isElder ? "match-board-cell__token--elder" : "",
                     selectedWyrm ? "match-board-cell__token--selected" : "",
+                    // Dim wyrms that have no legal moves in the move phase (movableWyrmIds set but this wyrm not in it)
+                    movableWyrmIds.length > 0 && !movableWyrmIds.includes(wyrm.id) && !selectedWyrmId
+                      ? "match-board-cell__token--no-moves"
+                      : "",
                     activeGhostMove
                     && wyrm.id === activeGhostMove.wyrmId
                     && ghostEnd
@@ -409,6 +415,9 @@ export function MatchScreen({
     hoardChoices,
     opponentChoices,
     canDeployFromHoard,
+    movableWyrmIds,
+    isAutoCoilState,
+    interactionHint,
   } = useMatchInteractions();
 
   const boardRef = useRef<HTMLDivElement | null>(null);
@@ -1343,8 +1352,14 @@ export function MatchScreen({
                 </div>
               ) : (
                 <>
-                  <p className="match-board-guidance__instruction">{instruction}</p>
-                  {instructionMeta ? (
+                  <p className="match-board-guidance__instruction">
+                    {isAutoCoilState ? "No Wyrms can move — place a trail instead" : instruction}
+                  </p>
+                  {interactionHint ? (
+                    <p className="match-board-guidance__meta match-board-guidance__meta--hint">
+                      {interactionHint}
+                    </p>
+                  ) : instructionMeta ? (
                     <p className="match-board-guidance__meta">
                       {instructionMeta}
                     </p>
@@ -1575,6 +1590,7 @@ export function MatchScreen({
                 ghostMove={ghostMove}
                 playerNames={playerNames}
                 disabled={showVictoryOverlay || isPaused || (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null)}
+                movableWyrmIds={movableWyrmIds}
                 onCellClick={handleBoardCellClick}
                 onCellHover={handleBoardCellHover}
               />
