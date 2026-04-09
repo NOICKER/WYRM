@@ -11,6 +11,9 @@ interface ResultsScreenProps {
   onViewChronicle: () => void;
   pendingAction: string | null;
   onCheckOpponent: () => Promise<boolean>;
+  forgeAnewLabel?: string;
+  forgeAnewDisabled?: boolean;
+  forgeAnewDisabledLabel?: string;
 }
 
 export function ResultsScreen({
@@ -20,6 +23,9 @@ export function ResultsScreen({
   onViewChronicle,
   pendingAction,
   onCheckOpponent,
+  forgeAnewLabel = "Play again",
+  forgeAnewDisabled = false,
+  forgeAnewDisabledLabel,
 }: ResultsScreenProps): React.JSX.Element {
   const [opponentConnected, setOpponentConnected] = useState(record.opponentStillConnected ?? true);
   const runOpponentCheck = useEffectEvent(onCheckOpponent);
@@ -76,9 +82,18 @@ export function ResultsScreen({
 
 
           <div className="results-actions">
-            {opponentConnected ? (
+            {forgeAnewDisabled ? (
+              <button
+                type="button"
+                className="button button--forest"
+                disabled
+                title={forgeAnewDisabledLabel}
+              >
+                {forgeAnewDisabledLabel ?? forgeAnewLabel}
+              </button>
+            ) : opponentConnected ? (
               <button type="button" className="button button--forest" onClick={onForgeAnew} disabled={Boolean(pendingAction)}>
-                {pendingAction === "forge-anew" ? <LoadingPulse label="Forging" /> : "Play again"}
+                {pendingAction === "forge-anew" ? <LoadingPulse label="Forging" /> : forgeAnewLabel}
               </button>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
@@ -88,7 +103,7 @@ export function ResultsScreen({
                   disabled
                   title="Your opponent has left the match."
                 >
-                  Play again
+                  {forgeAnewLabel}
                 </button>
                 <button type="button" className="text-link" onClick={() => onNavigate("/lobby")}>
                   Create a new room instead

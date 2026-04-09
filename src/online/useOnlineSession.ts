@@ -223,6 +223,8 @@ export function useOnlineSession(profile: UserProfile | null): OnlineSession {
           joined: true,
         });
         setMatchView(message.match);
+        // Write reconnect token so the banner in App.tsx can fire on a hard refresh
+        window.sessionStorage.setItem("wyrm_reconnect_token", message.match.matchId);
         return;
       case "queue_timeout":
         setQueueStatus("timed_out");
@@ -486,6 +488,8 @@ export function useOnlineSession(profile: UserProfile | null): OnlineSession {
     setMatchView(null);
     setMatchActionError(null);
     setRouteError(null);
+    // Clear reconnect token on clean exit (match ended, abandoned, or disconnect)
+    window.sessionStorage.removeItem("wyrm_reconnect_token");
   }, []);
 
   const clearError = useCallback(() => setError(null), []);

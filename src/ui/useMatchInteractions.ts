@@ -1,44 +1,81 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   PLAYER_NAMES,
-  canCommitPath,
   canResolveBlockedMove,
   getAdjacentEmptyCells,
   getControlledActiveWyrms,
   getCurrentPlayer,
   getDeployTargets,
-  getLegalMoves,
-  getNextPathOptions,
   getWyrmsWithLegalMoves,
   hasAnyLegalMove,
   validatePathReason,
 } from "../state/gameLogic.ts";
 import { canEndTurnNow } from "../state/gameEngine.ts";
+import type { Coord, MoveMode, PlayerId, RuneTileType, WyrmId } from "../state/types.ts";
 import { useGame } from "../state/useGameState.tsx";
 import {
-  getMatchPhase,
   getMatchInstruction,
+  getMatchPhase,
   hasHoardDeployOpportunity,
   type TileDraft,
 } from "./matchInteractionModel.ts";
-import type {
-  Coord,
-  MoveMode,
-  PlayerId,
-  RuneTileType,
-  TilePlayRequest,
-  WyrmId,
-} from "../state/types.ts";
+import {
+  buildTilePlayRequestFromDraft,
+  cancelMovementDraft,
+  createMovementDraft,
+  isInteractionLocked as getInteractionLockState,
+  isPreMoveRune,
+  isTileDraftReady,
+  rebuildMovementDraft,
+  stepMovementDraft,
+  type InteractionState,
+  type MovementDraft,
+} from "./matchInteractionState.ts";
 
-interface MoveSelection {
+interface PendingMoveCommit {
   wyrmId: WyrmId;
   path: Coord[];
   moveMode: MoveMode;
 }
 
+interface BoardClickResultNone {
+  kind: "none";
+}
+
+interface BoardClickResultMoveCommit extends PendingMoveCommit {
+  kind: "move_commit";
+}
+
+type BoardClickResult = BoardClickResultNone | BoardClickResultMoveCommit;
+
+interface InteractionErrorState {
+  id: number;
+  message: string;
+}
+
 function sameCoord(a: Coord, b: Coord): boolean {
   return a.row === b.row && a.col === b.col;
+}
+
+function getTrailCoordsByOwner(
+  state: ReturnType<typeof useGame>["state"],
+  ownerId: PlayerId,
+): Coord[] {
+  return state.board
+    .flat()
+    .filter((cell) => cell.trail?.owner === ownerId)
+    .map((cell) => ({ row: cell.row, col: cell.col }));
+}
+
+function getTrailCoordsBySource(
+  state: ReturnType<typeof useGame>["state"],
+  wyrmId: WyrmId,
+): Coord[] {
+  return state.board
+    .flat()
+    .filter((cell) => cell.trail?.sourceWyrmId === wyrmId)
+    .map((cell) => ({ row: cell.row, col: cell.col }));
 }
 
 export function useMatchInteractions() {
@@ -56,43 +93,50 @@ export function useMatchInteractions() {
     endTurn,
   } = game;
 
-  const [rawSelectedMove, setRawSelectedMove] = useState<MoveSelection | null>(null);
+  const [rawSelectedMove, setRawSelectedMove] = useState<MovementDraft | null>(null);
+  const [interactionState, setInteractionState] = useState<InteractionState>("idle");
   const [manualPreferredMoveMode, setManualPreferredMoveMode] = useState<MoveMode>("main");
   const [rawTileDraft, setRawTileDraft] = useState<TileDraft | null>(null);
   const [rawDeployWyrmId, setRawDeployWyrmId] = useState<WyrmId | null>(null);
   const [rawTrailWyrmId, setRawTrailWyrmId] = useState<WyrmId | null>(null);
   const [rawDiscardSelection, setRawDiscardSelection] = useState<number[]>([]);
   const [peekPlayerId, setPeekPlayerId] = useState<PlayerId | null>(null);
-  const [interactionHint, setInteractionHint] = useState<string | null>(null);
+  const [interactionError, setInteractionError] = useState<InteractionErrorState | null>(null);
 
   const currentPlayer = getCurrentPlayer(state);
   const phase = getMatchPhase(state);
   const activeControlledWyrms = getControlledActiveWyrms(state, currentPlayer.id);
   const preMoveTileWindow = phase === "move" && !state.turnEffects.mainMoveCompleted;
-  const hasPreMoveRune = currentPlayer.hand.some((tile) => tile === "water" || tile === "wind");
+  const hasPreMoveRune = currentPlayer.hand.some((tile) => isPreMoveRune(tile));
 
-  // Compute which wyrms can move at the start of the move phase, to drive UI and block invalid clicks upfront
   const movableWyrmIds = useMemo(() => {
-    if (phase !== "move" || state.turnEffects.mainMoveCompleted) return [];
-    const mainMovable = getWyrmsWithLegalMoves(state, currentPlayer.id, "main");
-    if (mainMovable.length > 0) return mainMovable;
-    // Fall back to tempest rush wyrms
-    return state.turnEffects.tempestRushRemaining.filter((id) =>
-      hasAnyLegalMove(state, id, "tempest")
-    );
-  }, [phase, state, currentPlayer.id]);
+    if (phase !== "move" || state.turnEffects.mainMoveCompleted) {
+      return [];
+    }
 
-  // True when in move phase, no wyrm can move, but a trail can be placed (blocked/coil)
+    const mainMovable = getWyrmsWithLegalMoves(state, currentPlayer.id, "main");
+    if (mainMovable.length > 0) {
+      return mainMovable;
+    }
+
+    return state.turnEffects.tempestRushRemaining.filter((id) => hasAnyLegalMove(state, id, "tempest"));
+  }, [currentPlayer.id, phase, state]);
+
   const isAutoCoilState = useMemo(() => {
-    if (phase !== "move" || state.turnEffects.mainMoveCompleted) return false;
-    if (state.dieResult === "coil" && state.turnEffects.coilChoice == null) return false;
+    if (phase !== "move" || state.turnEffects.mainMoveCompleted) {
+      return false;
+    }
+    if (state.dieResult === "coil" && state.turnEffects.coilChoice == null) {
+      return false;
+    }
     return movableWyrmIds.length === 0 && canResolveBlockedMove(state);
   }, [movableWyrmIds, phase, state]);
+
   const tileCounts = currentPlayer.hand.reduce<Record<RuneTileType, number>>((counts, tile) => {
     counts[tile] = (counts[tile] ?? 0) + 1;
     return counts;
   }, {} as Record<RuneTileType, number>);
-  const hasTileStepSinglePlay = currentPlayer.hand.some((tile) => tile !== "water" && tile !== "wind");
+  const hasTileStepSinglePlay = currentPlayer.hand.some((tile) => !isPreMoveRune(tile));
   const hasAnyLairSet = Object.values(tileCounts).some((count) => count >= 3);
   const preferredMoveMode =
     state.turnEffects.tempestRushRemaining.length === 0
@@ -101,13 +145,14 @@ export function useMatchInteractions() {
         ? "tempest"
         : manualPreferredMoveMode;
   const canDeployFromHoard = hasHoardDeployOpportunity(state, currentPlayer.hoard.length);
-  const selectedMove = phase === "move" ? rawSelectedMove : null;
+
+  const selectedMoveDraft = phase === "move" ? rawSelectedMove : null;
   const tileDraft =
     phase === "tile"
       ? rawTileDraft
       : preMoveTileWindow
         && rawTileDraft?.mode === "single"
-        && (rawTileDraft.tile === "water" || rawTileDraft.tile === "wind")
+        && isPreMoveRune(rawTileDraft.tile)
           ? rawTileDraft
           : null;
   const trailWyrmId = phase === "move" ? rawTrailWyrmId : null;
@@ -120,36 +165,76 @@ export function useMatchInteractions() {
       ? rawDeployWyrmId
       : null;
 
+  const selectedMove = selectedMoveDraft
+    ? {
+        wyrmId: selectedMoveDraft.activeWyrmId,
+        path: selectedMoveDraft.currentPath,
+        currentPosition: selectedMoveDraft.currentPosition,
+        moveMode: selectedMoveDraft.moveMode,
+      }
+    : null;
+  const currentPosition = selectedMoveDraft?.currentPosition ?? null;
+
+  const clearInteractionError = () => {
+    setInteractionError(null);
+  };
+
+  const raiseInteractionError = (message: string) => {
+    setInteractionError({
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      message,
+    });
+  };
+
+  const effectiveInteractionState: InteractionState =
+    selectedMoveDraft?.interactionState
+    ?? (tileDraft != null ? "tile_preview" : interactionState);
+  const isInteractionLocked = getInteractionLockState({
+    interactionState: effectiveInteractionState,
+    tileDraft,
+    deployWyrmId,
+    trailWyrmId,
+  });
+
+  useEffect(() => {
+    if (!interactionError) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setInteractionError((current) => (current?.id === interactionError.id ? null : current));
+    }, 1500);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [interactionError]);
+
   const clearInteraction = () => {
     setRawSelectedMove(null);
     setRawTileDraft(null);
     setRawDeployWyrmId(null);
     setRawTrailWyrmId(null);
     setRawDiscardSelection([]);
-    setInteractionHint(null);
+    clearInteractionError();
+    setInteractionState("idle");
   };
 
-  const moveTargets = useMemo(
-    () =>
-      selectedMove
-        ? getNextPathOptions(state, selectedMove.wyrmId, selectedMove.path, selectedMove.moveMode)
-        : [],
-    [selectedMove, state],
-  );
+  const stepsRemaining = selectedMoveDraft?.stepsRemaining ?? 0;
+  const moveTargets = useMemo(() => {
+    if (!selectedMoveDraft || !currentPosition || stepsRemaining <= 0) {
+      return [];
+    }
 
+    return selectedMoveDraft.nextStepOptions.filter((entry) => {
+      const rowDistance = Math.abs(entry.row - currentPosition.row);
+      const colDistance = Math.abs(entry.col - currentPosition.col);
+      return rowDistance + colDistance === 1;
+    });
+  }, [currentPosition, selectedMoveDraft, stepsRemaining]);
   const legalMoveTargets = useMemo(
-    () =>
-      selectedMove && selectedMove.path.length === 1
-        ? getLegalMoves(state, selectedMove.wyrmId, selectedMove.moveMode)
-        : [],
-    [selectedMove, state],
+    () => moveTargets.map((entry) => ({ row: entry.row, col: entry.col })),
+    [moveTargets],
   );
-
-  const canConfirmMove = Boolean(
-    selectedMove &&
-      selectedMove.path.length > 1 &&
-      canCommitPath(state, selectedMove.wyrmId, selectedMove.path, selectedMove.moveMode),
-  );
+  const canConfirmMove = Boolean(selectedMoveDraft?.canConfirmMove);
 
   const deployTargets = useMemo(
     () => (deployWyrmId ? getDeployTargets(state, currentPlayer.id) : []),
@@ -173,17 +258,20 @@ export function useMatchInteractions() {
     }
 
     switch (tileDraft.tile) {
+      case "fire":
+        return [];
       case "water":
       case "wind":
-        return activeControlledWyrms.map((wyrm) => wyrm.position!).filter(Boolean);
+        return tileDraft.mode === "single"
+          ? activeControlledWyrms.map((wyrm) => wyrm.position!).filter(Boolean)
+          : [];
       case "serpent":
-        if (tileDraft.mode === "single") {
-          return activeControlledWyrms.map((wyrm) => wyrm.position!).filter(Boolean);
-        }
-        return activeControlledWyrms
-          .filter((wyrm) => !wyrm.isElder)
-          .map((wyrm) => wyrm.position!)
-          .filter(Boolean);
+        return tileDraft.mode === "single"
+          ? activeControlledWyrms.map((wyrm) => wyrm.position!).filter(Boolean)
+          : activeControlledWyrms
+              .filter((wyrm) => !wyrm.isElder)
+              .map((wyrm) => wyrm.position!)
+              .filter(Boolean);
       case "earth":
         return state.board
           .flat()
@@ -201,13 +289,12 @@ export function useMatchInteractions() {
           .filter((cell) => !cell.hasWall && !cell.occupant && !cell.trail)
           .map((cell) => ({ row: cell.row, col: cell.col }));
       case "void":
-        if (tileDraft.mode === "single" && tileDraft.opponentId) {
-          return state.board
-            .flat()
-            .filter((cell) => cell.trail?.owner === tileDraft.opponentId)
-            .map((cell) => ({ row: cell.row, col: cell.col }));
-        }
-        return [];
+        return tileDraft.mode === "single" && tileDraft.opponentId
+          ? state.board
+              .flat()
+              .filter((cell) => cell.trail?.owner === tileDraft.opponentId)
+              .map((cell) => ({ row: cell.row, col: cell.col }))
+          : [];
       case "light":
         return [];
       default:
@@ -216,102 +303,130 @@ export function useMatchInteractions() {
   }, [activeControlledWyrms, deployTargets, deployWyrmId, state, tileDraft, trailTargets, trailWyrmId]);
 
   const markedTargets = useMemo(() => {
-    if (selectedMove) {
-      return selectedMove.path;
+    if (selectedMoveDraft) {
+      return selectedMoveDraft.currentPath;
     }
-    if (tileDraft?.tile === "earth") {
-      return tileDraft.cells;
+
+    if (!tileDraft) {
+      return [];
     }
-    if (tileDraft?.tile === "shadow" && tileDraft.mode === "single") {
-      return tileDraft.wyrmIds
-        .map((wyrmId) => state.wyrms[wyrmId]?.position)
-        .filter((coord): coord is Coord => Boolean(coord));
+
+    switch (tileDraft.tile) {
+      case "fire":
+        return getTrailCoordsByOwner(state, currentPlayer.id);
+      case "water":
+      case "wind":
+        if (tileDraft.mode === "lair") {
+          return [];
+        }
+        if (!tileDraft.wyrmId) {
+          return [];
+        }
+        return state.wyrms[tileDraft.wyrmId]?.position ? [state.wyrms[tileDraft.wyrmId].position!] : [];
+      case "serpent":
+        if (!tileDraft.wyrmId) {
+          return [];
+        }
+        if (tileDraft.tile === "serpent" && tileDraft.mode === "single") {
+          const selectedCoord = state.wyrms[tileDraft.wyrmId]?.position;
+          return [
+            ...(selectedCoord ? [selectedCoord] : []),
+            ...getTrailCoordsBySource(state, tileDraft.wyrmId),
+          ];
+        }
+        return state.wyrms[tileDraft.wyrmId]?.position ? [state.wyrms[tileDraft.wyrmId].position!] : [];
+      case "earth":
+        return tileDraft.cells;
+      case "shadow":
+        if (tileDraft.mode === "single") {
+          return tileDraft.wyrmIds
+            .map((wyrmId) => state.wyrms[wyrmId]?.position)
+            .filter((coord): coord is Coord => Boolean(coord));
+        }
+        return [
+          ...(tileDraft.wyrmId && state.wyrms[tileDraft.wyrmId]?.position ? [state.wyrms[tileDraft.wyrmId].position!] : []),
+          ...(tileDraft.targetCoord ? [tileDraft.targetCoord] : []),
+        ];
+      case "void":
+        return tileDraft.mode === "single"
+          ? tileDraft.cells
+          : tileDraft.opponentId != null
+            ? getTrailCoordsByOwner(state, tileDraft.opponentId)
+            : [];
+      case "light":
+        return [];
+      default:
+        return [];
     }
-    if (tileDraft?.tile === "shadow" && tileDraft.mode === "lair" && tileDraft.wyrmId) {
-      const coord = state.wyrms[tileDraft.wyrmId]?.position;
-      return coord ? [coord] : [];
-    }
-    if (tileDraft?.tile === "void" && tileDraft.mode === "single") {
-      return tileDraft.cells;
-    }
-    return [];
-  }, [selectedMove, state.wyrms, tileDraft]);
+  }, [currentPlayer.id, selectedMoveDraft, state, tileDraft]);
 
   const canPlayTiles =
     !state.turnEffects.tileActionUsed
     && (
       (phase === "tile" && (hasTileStepSinglePlay || hasAnyLairSet))
-      || (
-        preMoveTileWindow
-        && hasPreMoveRune
-      )
+      || (preMoveTileWindow && hasPreMoveRune)
     );
-  const canConfirmDiscard =
-    phase === "discard" && discardSelection.length === state.mustDiscard;
+  const canConfirmDiscard = phase === "discard" && discardSelection.length === state.mustDiscard;
   const canEndTurn = phase === "tile" && canEndTurnNow(state);
+  const canConfirmTileDraft = isTileDraftReady(tileDraft);
 
   const startTileDraft = (tile: RuneTileType, mode: "single" | "lair") => {
     if (state.turnEffects.tileActionUsed) {
       return;
     }
 
-    const inTileStep = phase === "tile" && !(mode === "single" && (tile === "water" || tile === "wind"));
-    const inPreMoveStep = preMoveTileWindow && mode === "single" && (tile === "water" || tile === "wind");
+    const inTileStep = phase === "tile" && !(mode === "single" && isPreMoveRune(tile));
+    const inPreMoveStep = preMoveTileWindow && mode === "single" && isPreMoveRune(tile);
     if (!inTileStep && !inPreMoveStep) {
       return;
     }
-    clearInteraction();
 
-    const immediateRequest: TilePlayRequest | null =
-      tile === "fire"
-        ? { mode, tile }
-        : tile === "water" && mode === "lair"
-          ? { mode, tile }
-          : tile === "wind" && mode === "lair"
-            ? { mode, tile }
-            : null;
+    setRawSelectedMove(null);
+    setRawDeployWyrmId(null);
+    setRawTrailWyrmId(null);
+    setRawDiscardSelection([]);
+    clearInteractionError();
+    setInteractionState("tile_preview");
 
-    if (immediateRequest) {
-      playTile(immediateRequest);
+    if (tile === "fire") {
+      setRawTileDraft({ tile, mode });
       return;
     }
-
+    if (tile === "water") {
+      setRawTileDraft({ tile, mode });
+      return;
+    }
     if (tile === "earth") {
       setRawTileDraft({ tile, mode, cells: [] });
       return;
     }
-
+    if (tile === "wind") {
+      setRawTileDraft({ tile, mode });
+      return;
+    }
     if (tile === "shadow" && mode === "single") {
       setRawTileDraft({ tile, mode, wyrmIds: [] });
       return;
     }
-
     if (tile === "shadow" && mode === "lair") {
-      setRawTileDraft({ tile, mode, wyrmId: null });
+      setRawTileDraft({ tile, mode, wyrmId: null, targetCoord: null });
       return;
     }
-
+    if (tile === "light") {
+      setRawTileDraft({ tile, mode, opponentId: null });
+      return;
+    }
     if (tile === "void" && mode === "single") {
       setRawTileDraft({ tile, mode, opponentId: null, cells: [] });
       return;
     }
-
     if (tile === "void" && mode === "lair") {
       setRawTileDraft({ tile, mode, opponentId: null });
       return;
     }
-
-    if (tile === "light") {
+    if (tile === "serpent") {
       setRawTileDraft({ tile, mode });
-      return;
     }
-
-    if (tile === "serpent" && mode === "lair") {
-      setRawTileDraft({ tile, mode });
-      return;
-    }
-
-    setRawTileDraft({ tile, mode } as TileDraft);
   };
 
   const toggleDiscard = (index: number) => {
@@ -336,14 +451,26 @@ export function useMatchInteractions() {
     const chosenTiles = discardSelection.map((index) => currentPlayer.hand[index]);
     discard(chosenTiles);
     setRawDiscardSelection([]);
+    setInteractionState("idle");
+  };
+
+  const commitMovePath = ({ wyrmId, path, moveMode }: PendingMoveCommit) => {
+    move(wyrmId, path, moveMode);
+    setRawSelectedMove(null);
+    clearInteractionError();
+    setInteractionState("idle");
   };
 
   const confirmMove = () => {
-    if (!selectedMove || !canConfirmMove) {
+    if (!selectedMoveDraft || !canConfirmMove) {
       return;
     }
-    move(selectedMove.wyrmId, selectedMove.path, selectedMove.moveMode);
-    setRawSelectedMove(null);
+
+    commitMovePath({
+      wyrmId: selectedMoveDraft.activeWyrmId,
+      path: selectedMoveDraft.currentPath,
+      moveMode: selectedMoveDraft.moveMode,
+    });
   };
 
   const chooseOpponent = (opponentId: PlayerId) => {
@@ -352,22 +479,16 @@ export function useMatchInteractions() {
     }
 
     if (tileDraft.tile === "light") {
-      playTile({ mode: tileDraft.mode, tile: "light", opponentId });
+      setRawTileDraft({ ...tileDraft, opponentId });
+      return;
+    }
+
+    if (tileDraft.tile === "void") {
       if (tileDraft.mode === "single") {
-        setPeekPlayerId(opponentId);
+        setRawTileDraft({ ...tileDraft, opponentId, cells: [] });
+      } else {
+        setRawTileDraft({ ...tileDraft, opponentId });
       }
-      setRawTileDraft(null);
-      return;
-    }
-
-    if (tileDraft.tile === "void" && tileDraft.mode === "lair") {
-      playTile({ mode: "lair", tile: "void", opponentId });
-      setRawTileDraft(null);
-      return;
-    }
-
-    if (tileDraft.tile === "void" && tileDraft.mode === "single") {
-      setRawTileDraft({ ...tileDraft, opponentId, cells: [] });
     }
   };
 
@@ -377,40 +498,55 @@ export function useMatchInteractions() {
     }
 
     if (tileDraft.tile === "shadow" && tileDraft.mode === "lair") {
-      setRawTileDraft({ ...tileDraft, wyrmId });
+      setRawTileDraft({ ...tileDraft, wyrmId, targetCoord: null });
       return;
     }
 
     if (tileDraft.tile === "serpent" && tileDraft.mode === "lair") {
-      playTile({ mode: "lair", tile: "serpent", wyrmId });
-      setRawTileDraft(null);
+      setRawTileDraft({ ...tileDraft, wyrmId });
     }
   };
 
-  const confirmVoidSelection = () => {
-    if (
-      tileDraft?.tile !== "void" ||
-      tileDraft.mode !== "single" ||
-      !tileDraft.opponentId ||
-      tileDraft.cells.length === 0
-    ) {
-      return;
+  const confirmTileDraft = () => {
+    const request = buildTilePlayRequestFromDraft(tileDraft);
+    if (!request || !tileDraft) {
+      raiseInteractionError("Preview the effect on a valid target, then confirm it.");
+      return false;
     }
-    playTile({
-      mode: "single",
-      tile: "void",
-      opponentId: tileDraft.opponentId,
-      targetCoords: tileDraft.cells,
-    });
+
+    playTile(request);
+    if (tileDraft.tile === "light" && tileDraft.mode === "single" && tileDraft.opponentId != null) {
+      setPeekPlayerId(tileDraft.opponentId);
+    }
     setRawTileDraft(null);
+    clearInteractionError();
+    setInteractionState("idle");
+    return true;
   };
+
+  const confirmVoidSelection = () => confirmTileDraft();
 
   const prepareDeploy = (wyrmId: WyrmId) => {
-    if (!canDeployFromHoard) {
+    if (!canDeployFromHoard || isInteractionLocked) {
       return;
     }
-    clearInteraction();
+    setRawSelectedMove(null);
+    setRawTileDraft(null);
+    setRawTrailWyrmId(null);
+    setRawDiscardSelection([]);
+    clearInteractionError();
+    setInteractionState("idle");
     setRawDeployWyrmId((current) => (current === wyrmId ? null : wyrmId));
+  };
+
+  const cancelMove = () => {
+    if (!selectedMoveDraft) {
+      return;
+    }
+    const cancelled = cancelMovementDraft(state, selectedMoveDraft);
+    setRawSelectedMove(cancelled);
+    clearInteractionError();
+    setInteractionState("wyrm_selected");
   };
 
   const handleTileBoardClick = (coord: Coord): boolean => {
@@ -422,34 +558,31 @@ export function useMatchInteractions() {
     const occupant = cell.occupant ? state.wyrms[cell.occupant] : null;
 
     switch (tileDraft.tile) {
+      case "fire":
+      case "light":
+        return false;
       case "water":
       case "wind":
+        if (tileDraft.mode === "lair") {
+          return false;
+        }
         if (
-          occupant &&
-          occupant.currentOwner === currentPlayer.id &&
-          occupant.status === "active"
+          occupant
+          && occupant.currentOwner === currentPlayer.id
+          && occupant.status === "active"
         ) {
-          playTile({ mode: "single", tile: tileDraft.tile, wyrmId: occupant.id });
-          setRawTileDraft(null);
+          setRawTileDraft({ ...tileDraft, wyrmId: occupant.id });
           return true;
         }
         return false;
       case "serpent":
-        if (tileDraft.mode === "single") {
-          if (
-            occupant &&
-            occupant.currentOwner === currentPlayer.id &&
-            occupant.status === "active"
-          ) {
-            playTile({ mode: "single", tile: "serpent", wyrmId: occupant.id });
-            setRawTileDraft(null);
-            return true;
-          }
-          return false;
-        }
-        if (occupant && occupant.currentOwner === currentPlayer.id && !occupant.isElder) {
-          playTile({ mode: "lair", tile: "serpent", wyrmId: occupant.id });
-          setRawTileDraft(null);
+        if (
+          occupant
+          && occupant.currentOwner === currentPlayer.id
+          && occupant.status === "active"
+          && (tileDraft.mode === "single" || !occupant.isElder)
+        ) {
+          setRawTileDraft({ ...tileDraft, wyrmId: occupant.id });
           return true;
         }
         return false;
@@ -460,45 +593,25 @@ export function useMatchInteractions() {
         const alreadySelected = tileDraft.cells.some((entry) => sameCoord(entry, coord));
         const nextCells = alreadySelected
           ? tileDraft.cells.filter((entry) => !sameCoord(entry, coord))
-          : [...tileDraft.cells, coord];
-        const needed = tileDraft.mode === "lair" ? 3 : 1;
-        if (nextCells.length === needed) {
-          playTile({ mode: tileDraft.mode, tile: "earth", targetCoords: nextCells });
-          setRawTileDraft(null);
-        } else {
-          setRawTileDraft({ ...tileDraft, cells: nextCells });
-        }
+          : [...tileDraft.cells, coord].slice(0, tileDraft.mode === "lair" ? 3 : 1);
+        setRawTileDraft({ ...tileDraft, cells: nextCells });
         return true;
       }
       case "shadow":
         if (tileDraft.mode === "single") {
-          if (
-            !occupant ||
-            occupant.currentOwner !== currentPlayer.id ||
-            occupant.status !== "active"
-          ) {
+          if (!occupant || occupant.currentOwner !== currentPlayer.id || occupant.status !== "active") {
             return false;
           }
           const nextIds = tileDraft.wyrmIds.includes(occupant.id)
             ? tileDraft.wyrmIds.filter((entry) => entry !== occupant.id)
-            : [...tileDraft.wyrmIds, occupant.id];
-
-          if (nextIds.length === 2) {
-            playTile({
-              mode: "single",
-              tile: "shadow",
-              swapWyrmIds: [nextIds[0], nextIds[1]],
-            });
-            setRawTileDraft(null);
-          } else {
-            setRawTileDraft({ ...tileDraft, wyrmIds: nextIds });
-          }
+            : [...tileDraft.wyrmIds, occupant.id].slice(0, 2);
+          setRawTileDraft({ ...tileDraft, wyrmIds: nextIds });
           return true;
         }
 
         if (!tileDraft.wyrmId) {
           if (occupant && occupant.currentOwner === currentPlayer.id) {
-            setRawTileDraft({ ...tileDraft, wyrmId: occupant.id });
+            setRawTileDraft({ ...tileDraft, wyrmId: occupant.id, targetCoord: null });
             return true;
           }
           return false;
@@ -507,19 +620,13 @@ export function useMatchInteractions() {
         if (cell.occupant || cell.hasWall || cell.trail) {
           return false;
         }
-        playTile({
-          mode: "lair",
-          tile: "shadow",
-          teleportWyrmId: tileDraft.wyrmId,
-          targetCoords: [coord],
-        });
-        setRawTileDraft(null);
+        setRawTileDraft({ ...tileDraft, targetCoord: coord });
         return true;
       case "void":
         if (
-          tileDraft.mode === "single" &&
-          tileDraft.opponentId &&
-          cell.trail?.owner === tileDraft.opponentId
+          tileDraft.mode === "single"
+          && tileDraft.opponentId
+          && cell.trail?.owner === tileDraft.opponentId
         ) {
           const exists = tileDraft.cells.some((entry) => sameCoord(entry, coord));
           const nextCells = exists
@@ -534,130 +641,173 @@ export function useMatchInteractions() {
     }
   };
 
-  const handleBoardClick = (coord: Coord) => {
+  const handleBoardClick = (coord: Coord): BoardClickResult => {
     if (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null) {
-      return;
+      return { kind: "none" };
     }
 
-    if (handleTileBoardClick(coord)) {
-      return;
+    if (tileDraft) {
+      if (handleTileBoardClick(coord)) {
+        clearInteractionError();
+      } else {
+        raiseInteractionError("Choose one highlighted target or cancel the effect.");
+      }
+      return { kind: "none" };
     }
 
     if (deployWyrmId) {
       if (deployTargets.some((entry) => sameCoord(entry, coord))) {
         deploy(deployWyrmId, coord);
         setRawDeployWyrmId(null);
+        setInteractionState("idle");
+        clearInteractionError();
+      } else {
+        raiseInteractionError("Choose a highlighted Den cell.");
       }
-      return;
+      return { kind: "none" };
     }
 
     if (trailWyrmId) {
       if (trailTargets.some((entry) => sameCoord(entry, coord))) {
         placeCoilTrail(trailWyrmId, coord);
         setRawTrailWyrmId(null);
+        setInteractionState("idle");
+        clearInteractionError();
+      } else {
+        raiseInteractionError("Choose a highlighted adjacent cell.");
       }
-      return;
+      return { kind: "none" };
     }
 
     const cell = state.board[coord.row][coord.col];
     const occupant = cell.occupant ? state.wyrms[cell.occupant] : null;
 
-    if (selectedMove) {
-      const option = moveTargets.find(
-        (entry) => entry.row === coord.row && entry.col === coord.col,
-      );
+    if (selectedMoveDraft) {
+      if (
+        selectedMoveDraft.currentPath.length > 1
+        && sameCoord(selectedMoveDraft.currentPath[selectedMoveDraft.currentPath.length - 2], coord)
+      ) {
+        const rewound = rebuildMovementDraft(
+          state,
+          selectedMoveDraft.activeWyrmId,
+          selectedMoveDraft.currentPath.slice(0, -1),
+          selectedMoveDraft.moveMode,
+        );
+        if (rewound) {
+          setRawSelectedMove(rewound);
+          setInteractionState(rewound.interactionState);
+          clearInteractionError();
+        }
+        return { kind: "none" };
+      }
+
+      const stepResult = stepMovementDraft(state, selectedMoveDraft, coord);
+      if (stepResult.status === "updated") {
+        setRawSelectedMove(stepResult.draft);
+        setInteractionState(stepResult.draft.interactionState);
+        clearInteractionError();
+        return { kind: "none" };
+      }
+
+      if (stepResult.status === "committed") {
+        const previewDraft = rebuildMovementDraft(
+          state,
+          selectedMoveDraft.activeWyrmId,
+          stepResult.pathToCommit,
+          selectedMoveDraft.moveMode,
+        );
+        if (previewDraft) {
+          setRawSelectedMove(previewDraft);
+          setInteractionState(previewDraft.interactionState);
+        }
+        clearInteractionError();
+        return {
+          kind: "move_commit",
+          wyrmId: selectedMoveDraft.activeWyrmId,
+          path: stepResult.pathToCommit,
+          moveMode: selectedMoveDraft.moveMode,
+        };
+      }
 
       if (
-        selectedMove.path.length > 1 &&
-        sameCoord(selectedMove.path[selectedMove.path.length - 2], coord)
+        selectedMoveDraft.interactionState === "wyrm_selected"
+        && occupant
+        && occupant.currentOwner === currentPlayer.id
+        && occupant.position
+        && occupant.id !== selectedMoveDraft.activeWyrmId
+        && movableWyrmIds.includes(occupant.id)
       ) {
-        setRawSelectedMove({
-          ...selectedMove,
-          path: selectedMove.path.slice(0, -1),
-        });
-        setInteractionHint(null);
-        return;
-      }
-
-      if (!option) {
-        // Clicked own wyrm — only switch selection to it if it's movable
-        if (occupant && occupant.currentOwner === currentPlayer.id && occupant.position) {
-          if (movableWyrmIds.includes(occupant.id)) {
-            setRawSelectedMove(null);
-            setInteractionHint(null);
-          }
-          // Non-movable wyrm click: silently ignore, dim in UI already explains
+        const switched = createMovementDraft(state, occupant.id, selectedMoveDraft.moveMode);
+        if (switched) {
+          setRawSelectedMove(switched);
+          setInteractionState(switched.interactionState);
+          clearInteractionError();
         }
-        // Invalid cell click: silently ignore — no toast spam
-        return;
+        return { kind: "none" };
       }
 
-      // Valid step option — also run validatePathReason for edge-case hints
-      const candidatePath = [...selectedMove.path, coord];
-      const validation = validatePathReason(state, selectedMove.wyrmId, candidatePath, selectedMove.moveMode);
-      if (!validation.valid && validation.reason) {
-        setInteractionHint(validation.reason);
-      } else {
-        setInteractionHint(null);
-      }
-
-      const nextPath = [...selectedMove.path, coord];
-      setRawSelectedMove({
-        ...selectedMove,
-        path: nextPath,
-      });
-      return;
+      const validation = validatePathReason(
+        state,
+        selectedMoveDraft.activeWyrmId,
+        [...selectedMoveDraft.currentPath, coord],
+        selectedMoveDraft.moveMode,
+      );
+      raiseInteractionError(validation.reason ?? "Choose one highlighted adjacent cell.");
+      return { kind: "none" };
     }
 
     if (!occupant || occupant.currentOwner !== currentPlayer.id || !occupant.position) {
-      return;
+      if (phase === "move") {
+        raiseInteractionError("Select one of your Wyrms to begin.");
+      }
+      return { kind: "none" };
     }
 
     if (!state.turnEffects.mainMoveCompleted) {
       if (
-        state.dieResult === "coil" &&
-        !occupant.isElder &&
-        state.turnEffects.coilChoice === "extra_trail"
+        state.dieResult === "coil"
+        && !occupant.isElder
+        && state.turnEffects.coilChoice === "extra_trail"
       ) {
         setRawTrailWyrmId(occupant.id);
-        return;
+        setInteractionState("idle");
+        return { kind: "none" };
       }
 
       if (preferredMoveMode === "main" && hasAnyLegalMove(state, occupant.id, "main")) {
-        setRawSelectedMove({
-          wyrmId: occupant.id,
-          path: [occupant.position],
-          moveMode: "main",
-        });
-        setInteractionHint(null);
-        return;
+        const draft = createMovementDraft(state, occupant.id, "main");
+        if (draft) {
+          setRawSelectedMove(draft);
+          setInteractionState(draft.interactionState);
+          clearInteractionError();
+        }
+        return { kind: "none" };
       }
 
-      // Wyrm has no legal moves but other wyrms can move — silently ignore
       if (!hasAnyLegalMove(state, occupant.id, "main") && movableWyrmIds.length > 0) {
-        return;
+        raiseInteractionError("Choose a Wyrm with a highlighted path.");
+        return { kind: "none" };
       }
     }
 
     if (
-      state.turnEffects.tempestRushRemaining.includes(occupant.id) &&
-      hasAnyLegalMove(state, occupant.id, "tempest")
+      state.turnEffects.tempestRushRemaining.includes(occupant.id)
+      && hasAnyLegalMove(state, occupant.id, "tempest")
     ) {
-      setRawSelectedMove({
-        wyrmId: occupant.id,
-        path: [occupant.position],
-        moveMode: "tempest",
-      });
-      setInteractionHint(null);
-      return;
+      const draft = createMovementDraft(state, occupant.id, "tempest");
+      if (draft) {
+        setRawSelectedMove(draft);
+        setInteractionState(draft.interactionState);
+        clearInteractionError();
+      }
+      return { kind: "none" };
     }
 
-    if (
-      canResolveBlockedMove(state) &&
-      getAdjacentEmptyCells(state, occupant.id, true).length > 0
-    ) {
+    if (canResolveBlockedMove(state) && getAdjacentEmptyCells(state, occupant.id, true).length > 0) {
       setRawTrailWyrmId(occupant.id);
+      setInteractionState("idle");
     }
+    return { kind: "none" };
   };
 
   const instruction = useMemo(
@@ -667,41 +817,58 @@ export function useMatchInteractions() {
         tileDraft,
         deployWyrmId,
         trailWyrmId,
-        hasSelectedMove: selectedMove != null,
+        hasSelectedMove: selectedMoveDraft != null,
         canConfirmMove,
         hoardChoicesCount: currentPlayer.hoard.length,
+        interactionState: effectiveInteractionState,
+        stepsRemaining,
+        tileDraftReady: canConfirmTileDraft,
       }),
     [
       canConfirmMove,
+      canConfirmTileDraft,
       currentPlayer.hoard.length,
       deployWyrmId,
-      selectedMove,
+      effectiveInteractionState,
+      selectedMoveDraft,
       state,
+      stepsRemaining,
       tileDraft,
       trailWyrmId,
     ],
   );
 
-  const performPhasePrimaryAction = () => {
+  const performPhasePrimaryAction = (): BoardClickResult => {
     if (phase === "draw") {
       draw();
-      return;
+      clearInteractionError();
+      setInteractionState("idle");
+      return { kind: "none" };
     }
     if (phase === "roll") {
       roll();
-      return;
+      clearInteractionError();
+      setInteractionState("idle");
+      return { kind: "none" };
     }
     if (phase === "discard" && canConfirmDiscard) {
       confirmDiscard();
-      return;
+      return { kind: "none" };
     }
-    if (phase === "move" && canConfirmMove) {
-      confirmMove();
-      return;
+    if (phase === "move" && selectedMoveDraft && canConfirmMove) {
+      return {
+        kind: "move_commit",
+        wyrmId: selectedMoveDraft.activeWyrmId,
+        path: selectedMoveDraft.currentPath,
+        moveMode: selectedMoveDraft.moveMode,
+      };
     }
     if (phase === "tile" && canEndTurn) {
       endTurn();
+      clearInteractionError();
+      setInteractionState("idle");
     }
+    return { kind: "none" };
   };
 
   return {
@@ -713,7 +880,8 @@ export function useMatchInteractions() {
     preferredMoveMode,
     setManualPreferredMoveMode,
     selectedMove,
-    selectedWyrmId: selectedMove?.wyrmId ?? null,
+    currentPosition,
+    selectedWyrmId: selectedMoveDraft?.activeWyrmId ?? null,
     tileDraft,
     deployWyrmId,
     trailWyrmId,
@@ -724,18 +892,22 @@ export function useMatchInteractions() {
     moveTargets,
     actionTargets,
     markedTargets,
-    selectedPath: selectedMove?.path ?? [],
+    selectedPath: selectedMoveDraft?.currentPath ?? [],
     canConfirmMove,
     canConfirmDiscard,
+    canConfirmTileDraft,
     canEndTurn,
     canPlayTiles,
     clearInteraction,
+    cancelMove,
     startTileDraft,
     toggleDiscard,
     confirmDiscard,
     confirmMove,
+    commitMovePath,
     chooseOpponent,
     chooseSpecialWyrm,
+    confirmTileDraft,
     confirmVoidSelection,
     prepareDeploy,
     handleBoardClick,
@@ -761,6 +933,9 @@ export function useMatchInteractions() {
     canDeployFromHoard,
     movableWyrmIds,
     isAutoCoilState,
-    interactionHint,
+    interactionError,
+    interactionState: effectiveInteractionState,
+    stepsRemaining,
+    isInteractionLocked,
   };
 }

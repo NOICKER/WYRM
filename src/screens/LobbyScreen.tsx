@@ -90,7 +90,6 @@ export function LobbyScreen({
 
         <div className="sidebar-profile">
           <span>{profile.username}</span>
-          <span className="level-badge">Lv. {profile.level}</span>
         </div>
       </aside>
 

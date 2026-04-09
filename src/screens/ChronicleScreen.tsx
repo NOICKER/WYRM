@@ -66,6 +66,9 @@ export function ChronicleScreen({
         </header>
 
         <div className="chronicle-feed">
+          {groupedRounds.length === 0 ? (
+            <p className="chronicle-empty">No matches recorded yet. Play your first game to begin.</p>
+          ) : null}
           {groupedRounds.map(([round, events]) => (
             <section key={round} className="chronicle-round">
               <div className="chronicle-round__separator">Round {toRoman(round)}</div>

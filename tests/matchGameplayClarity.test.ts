@@ -104,9 +104,10 @@ import {
       hasSelectedMove: true,
       canConfirmMove: false,
       hoardChoicesCount: 0,
+      interactionState: "wyrm_selected",
     }),
-    "Selected Wyrm is highlighted. Legal destinations glow on the board.",
-    "the move step should call out the selected wyrm and visible legal moves",
+    "Selected Wyrm is highlighted. Start plotting the path with an adjacent step.",
+    "the move step should direct the player into adjacent step building instead of highlighting distant endpoints",
   );
 }
 
@@ -132,9 +133,9 @@ import {
     getTileSelectionPreview({ tile: "void", mode: "single", opponentId: null, cells: [] }),
     {
       title: "Erasure",
-      detail: "Pick one opponent, then remove up to 3 of their trail markers.",
+      detail: "Pick one opponent, preview up to 3 of their trail markers, then confirm.",
     },
-    "selected tile previews should explain the effect in plain language",
+    "selected tile previews should explain the preview-first effect flow in plain language",
   );
 }
 
@@ -160,8 +161,8 @@ import {
 
   assert.match(
     matchScreen,
-    /match-board-guidance__status/,
-    "the board guidance should render a dedicated roll-status area for clarity feedback",
+    /match-die-panel__feedback/,
+    "the match screen should keep the rolled value and its movement meaning together in the die area",
   );
 
   assert.match(
@@ -216,6 +217,24 @@ import {
     matchScreen,
     /tile-selection-preview__suggestion/,
     "selected rune tiles should surface contextual strategic suggestions",
+  );
+
+  assert.match(
+    matchScreen,
+    /match-board-stage[\s\S]*match-instruction-bar/s,
+    "the main match flow should place the board before the instruction bar",
+  );
+
+  assert.match(
+    matchScreen,
+    /match-instruction-bar__number/,
+    "the instruction bar should wrap the exact movement count so the key number can be emphasized",
+  );
+
+  assert.match(
+    css,
+    /\.match-board-cell--dimmed/s,
+    "movement and tile previews should dim irrelevant board cells so the next valid action stands out",
   );
 }
 

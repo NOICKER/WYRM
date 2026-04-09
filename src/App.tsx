@@ -20,7 +20,6 @@ import { OnlineGameProvider } from "./state/useOnlineGameState.tsx";
 import { LoadingPulse } from "./components/LoadingPulse.tsx";
 import { ScreenError } from "./components/ScreenError.tsx";
 import { Wordmark } from "./components/Wordmark.tsx";
-import type { PlayerColor, PlayerId } from "./state/types.ts";
 import type { GameState } from "./state/types.ts";
 import type { BotDifficulty } from "./state/botEngine.ts";
 import "./index.css";
@@ -28,10 +27,8 @@ import { useOnlineSession } from "./online/useOnlineSession.ts";
 import {
   AUTH_QUOTES,
   LOBBY_QUOTES,
-  RESULT_QUOTES,
   buildChronicleEvent,
   buildMatchRecord,
-  generateAssemblyCode,
   getProtectedRedirect,
   parseAppRoute,
   pickRotating,
@@ -78,75 +75,6 @@ function readInitialSettingsPreferences() {
   }
 }
 
-function createSeedRecord(
-  id: string,
-  sessionIndex: number,
-  localPlayerName: string,
-  winnerName: string,
-  winnerColor: PlayerColor,
-  result: "win" | "loss",
-): MatchRecord {
-  const playerId: PlayerId = result === "win" ? 1 : 4;
-  return {
-    id,
-    roomId: `room-${sessionIndex}`,
-    roomCode: generateAssemblyCode(2020 + sessionIndex),
-    winnerId: playerId,
-    winnerName,
-    winnerColor,
-    localPlayerId: 4,
-    localPlayerName,
-    localPlayerColor: "amber",
-    result,
-    rounds: 9 + sessionIndex,
-    opponents: ["Mara Thorne", "Elden Vale"].slice(0, result === "win" ? 1 : 2),
-    conquest: 2 + sessionIndex,
-    strategy: 4 + sessionIndex,
-    groveControl: 56 + sessionIndex * 7,
-    sessionIndex,
-    completedAt: Date.UTC(2026, 3, sessionIndex),
-    flavorQuote: pickRotating(RESULT_QUOTES, sessionIndex),
-    events: [
-      {
-        id: `${id}-1`,
-        round: 1,
-        playerId: 1,
-        playerName: "Mara Thorne",
-        playerColor: "purple",
-        title: "Mara Thorne drew a Fire Rune",
-        description: "Mara Thorne drew a Fire Rune, adding another whispered option to the hand.",
-        actionBadge: "ACTION: DRAW",
-        eventType: "standard",
-      },
-      {
-        id: `${id}-2`,
-        round: 3,
-        playerId: 4,
-        playerName: localPlayerName,
-        playerColor: "amber",
-        title: `${localPlayerName} moved through the Sacred Grove`,
-        description: `${localPlayerName} shifted the center of the board and the entire table felt it.`,
-        actionBadge: "ACTION: MOVE",
-        eventType: "grove",
-        regionTag: "Sacred Grove",
-        artTitle: "grove illustration",
-      },
-      {
-        id: `${id}-3`,
-        round: 5,
-        playerId: playerId,
-        playerName: winnerName,
-        playerColor: winnerColor,
-        title: `${winnerName} captured a rival wyrm`,
-        description: `${winnerName} turned the lane into a sudden combat encounter.`,
-        actionBadge: "ACTION: COMBAT",
-        eventType: "combat",
-        regionTag: "Outer Ring",
-        artTitle: "combat illustration",
-      },
-    ],
-  };
-}
 
 function AppShell(): React.JSX.Element {
   const game = useGame();
@@ -169,11 +97,7 @@ function AppShell(): React.JSX.Element {
     playerNames: Record<number, string>;
     playerBots: Record<number, BotDifficulty>;
   } | null>(null);
-  const [completedMatches, setCompletedMatches] = useState<Record<string, MatchRecord>>(() => ({
-    "seed-1": createSeedRecord("seed-1", 1, "Sable Quill", "Sable Quill", "amber", "win"),
-    "seed-2": createSeedRecord("seed-2", 2, "Sable Quill", "Mara Thorne", "purple", "loss"),
-    "seed-3": createSeedRecord("seed-3", 3, "Sable Quill", "Sable Quill", "amber", "win"),
-  }));
+  const [completedMatches, setCompletedMatches] = useState<Record<string, MatchRecord>>({}); // starts empty; populated by real games
   const onlineSession = useOnlineSession(profile);
   const {
     clearActiveMatchContext,
@@ -878,6 +802,8 @@ function AppShell(): React.JSX.Element {
             onNavigate={navigatePath}
             onAbandonMatch={handleAbandonMatch}
             onOpenGuide={() => setGuideOpen(true)}
+            showGuestChip={Boolean(profile?.isGuest && !guestBannerDismissed)}
+            onDismissGuestChip={() => setGuestBannerDismissed(true)}
           />
         </OnlineGameProvider>
       );
@@ -892,6 +818,8 @@ function AppShell(): React.JSX.Element {
           onNavigate={navigatePath}
           onAbandonMatch={handleAbandonMatch}
           onOpenGuide={() => setGuideOpen(true)}
+          showGuestChip={Boolean(profile?.isGuest && !guestBannerDismissed)}
+          onDismissGuestChip={() => setGuestBannerDismissed(true)}
         />
       );
     }
@@ -954,6 +882,8 @@ function AppShell(): React.JSX.Element {
             onNavigate={navigatePath}
             onAbandonMatch={() => navigate({ name: "lobby" })}
             onOpenGuide={() => setGuideOpen(true)}
+            showGuestChip={Boolean(profile?.isGuest && !guestBannerDismissed)}
+            onDismissGuestChip={() => setGuestBannerDismissed(true)}
             localMode
             localPlayerNames={localPlayerConfig.playerNames}
             localPlayerBots={localPlayerConfig.playerBots}
@@ -979,21 +909,22 @@ function AppShell(): React.JSX.Element {
           }}
           onForgeAnew={() => {
             if (!profile) return;
-            setPendingAction("forge-anew");
-            const room = seedHostRoom(profile);
-            const opponent = currentRecord.opponents[0] ?? "Elden Vale";
-            room.seats[1] = {
-              ...room.seats[1],
-              name: opponent,
-              ready: true,
-            };
-            setRooms((current) => ({ ...current, [room.id]: room }));
-            setActiveRoomId(room.id);
-            window.setTimeout(() => {
-              setPendingAction(null);
-              navigate({ name: "assembly", roomId: room.id });
-            }, 260);
+            // Local match: go back to the local setup screen for a fresh game
+            if (currentRecord.id === "local") {
+              navigate({ name: "local_setup" });
+              return;
+            }
+            // Online match: rematch invite not yet implemented
           }}
+          forgeAnewLabel={
+            currentRecord.id === "local"
+              ? "Play again"
+              : undefined
+          }
+          forgeAnewDisabled={
+            currentRecord.id !== "local"
+          }
+          forgeAnewDisabledLabel="Rematch invite — coming soon"
           onViewChronicle={() => navigate({ name: "chronicle", matchId: currentRecord.id })}
         />
       );
@@ -1024,7 +955,7 @@ function AppShell(): React.JSX.Element {
     );
   })();
 
-  const showGuestBanner = profile?.isGuest && !guestBannerDismissed && !["auth", "landing"].includes(route.name);
+  const showGuestBanner = profile?.isGuest && !guestBannerDismissed && !["auth", "landing", "match", "local_match"].includes(route.name);
   const showReconnectBanner = reconnectBannerVisible && profile && route.name === "lobby";
   const showStickyNotice = showGuestBanner || showReconnectBanner;
   const connectionBannerVisible = connectionBannerStatus !== "connected";

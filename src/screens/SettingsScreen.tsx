@@ -1,9 +1,8 @@
 import React, { useMemo, useState } from "react";
 
-import { ScreenError } from "../components/ScreenError.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
 import type { MatchRecord, UserProfile } from "../ui/appModel.ts";
-import { formatMatchHistoryDate, validatePasswordChange } from "../ui/settingsPreferences.ts";
+import { formatMatchHistoryDate } from "../ui/settingsPreferences.ts";
 
 interface SettingsScreenProps {
   profile: UserProfile;
@@ -106,13 +105,6 @@ export function SettingsScreen({
 }: SettingsScreenProps): React.JSX.Element {
   const [displayName, setDisplayName] = useState(profile.username);
   const [displayNameSaved, setDisplayNameSaved] = useState(false);
-  const [passwordDraft, setPasswordDraft] = useState({
-    currentPassword: "",
-    newPassword: "",
-    confirmPassword: "",
-  });
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-  const [passwordSuccess, setPasswordSuccess] = useState(false);
 
   const canSaveDisplayName = useMemo(() => {
     const trimmed = displayName.trim();
@@ -128,23 +120,6 @@ export function SettingsScreen({
     setDisplayNameSaved(true);
   };
 
-  const handlePasswordSubmit = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const validationError = validatePasswordChange(passwordDraft);
-    if (validationError) {
-      setPasswordError(validationError);
-      setPasswordSuccess(false);
-      return;
-    }
-
-    setPasswordError(null);
-    setPasswordSuccess(true);
-    setPasswordDraft({
-      currentPassword: "",
-      newPassword: "",
-      confirmPassword: "",
-    });
-  };
 
   const handleClearHistory = () => {
     if (matchHistory.length === 0) {
@@ -177,7 +152,6 @@ export function SettingsScreen({
 
         <div className="sidebar-profile">
           <span>{profile.username}</span>
-          <span className="level-badge">Lv. {profile.level}</span>
         </div>
       </aside>
 
@@ -243,52 +217,6 @@ export function SettingsScreen({
                 {displayNameSaved ? (
                   <p style={{ margin: 0, color: "var(--success)", fontWeight: 700 }}>Display name saved</p>
                 ) : null}
-
-                <hr style={dividerStyle} />
-
-                <form style={{ display: "grid", gap: "0.75rem" }} onSubmit={handlePasswordSubmit}>
-                  <label className="field">
-                    <span>Current password</span>
-                    <input
-                      type="password"
-                      value={passwordDraft.currentPassword}
-                      onChange={(event) =>
-                        setPasswordDraft((current) => ({ ...current, currentPassword: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>New password</span>
-                    <input
-                      type="password"
-                      value={passwordDraft.newPassword}
-                      onChange={(event) =>
-                        setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Confirm password</span>
-                    <input
-                      type="password"
-                      value={passwordDraft.confirmPassword}
-                      onChange={(event) =>
-                        setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))
-                      }
-                    />
-                  </label>
-
-                  {passwordError ? <ScreenError message={passwordError} /> : null}
-                  {passwordSuccess ? (
-                    <p style={{ margin: 0, color: "var(--success)", fontWeight: 700 }}>Password changed</p>
-                  ) : null}
-
-                  <div>
-                    <button type="submit" className="button button--forest">
-                      Update password
-                    </button>
-                  </div>
-                </form>
               </>
             )}
           </section>
@@ -310,7 +238,7 @@ export function SettingsScreen({
             <hr style={dividerStyle} />
             <PreferenceToggle
               label="Sound effects"
-              description="Placeholder for future match audio cues. Saved now, used later."
+              description="Coming soon — your preference is saved for when audio lands."
               checked={soundEnabled}
               onChange={onToggleSound}
             />

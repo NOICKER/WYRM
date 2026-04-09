@@ -30,27 +30,52 @@ assert.match(
   "the top bar should reserve space for the fixed global back button so the wordmark does not render underneath it",
 );
 
-assert.ok(
-  !matchScreen.includes("width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%'"),
-  "the board stage should not hardcode itself to the full row width because that strands floating controls in empty space",
-);
-
 assert.match(
   css,
-  /\.rune-card-shell--tray\s+\.rune-card\s*\{[^}]*width:\s*\d+px;/s,
-  "footer cards should have a dedicated compact tray variant with a smaller real width",
-);
-
-assert.doesNotMatch(
-  css,
-  /\.hand-tray__cards\s*\{[^}]*padding:\s*1\.5rem 1rem 0\.2rem;/s,
-  "the hand tray should not keep the tall top padding that pushes cards into the board",
+  /\.match-layout-shell\s*\{[^}]*grid-template-columns:\s*[^;]*minmax\(0,\s*1fr\)[^;]*\}/s,
+  "the match screen should define a three-column shell so the board stays centered between fixed sidebars",
 );
 
 assert.match(
   matchScreen,
-  /className="rune-card-shell--tray"/,
-  "match tray cards should opt into the compact tray card styling",
+  /match-sidebar match-sidebar--left/,
+  "the match layout should render a dedicated left sidebar for the current player's context",
+);
+
+assert.match(
+  matchScreen,
+  /match-sidebar match-sidebar--right/,
+  "the match layout should render a dedicated right sidebar for dice and turn state",
+);
+
+assert.match(
+  matchScreen,
+  /match-layout-shell[\s\S]*match-sidebar match-sidebar--left[\s\S]*match-main-column[\s\S]*match-sidebar match-sidebar--right/s,
+  "the central board column should sit between the left and right sidebars",
+);
+
+assert.doesNotMatch(
+  matchScreen,
+  /opponent-tracker-bar/,
+  "the old horizontal player strip should be removed once its data is redistributed into the sidebars",
+);
+
+assert.doesNotMatch(
+  matchScreen,
+  /hand-tray/,
+  "the old bottom hand tray should be removed once player context moves into the left sidebar",
+);
+
+assert.match(
+  app,
+  /!\["auth", "landing", "match", "local_match"\]\.includes\(route\.name\)/,
+  "the full-width guest strip should no longer render on match routes",
+);
+
+assert.match(
+  matchScreen,
+  /match-guest-chip/,
+  "match routes should render the compact guest chip inside the header instead of a full-width strip",
 );
 
 assert.match(

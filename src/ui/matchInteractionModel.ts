@@ -14,21 +14,12 @@ import type {
   WyrmId,
 } from "../state/types.ts";
 import { getTileName } from "./appModel.ts";
+import type { InteractionState, TileDraft } from "./matchInteractionState.ts";
+
+export type { InteractionState, TileDraft } from "./matchInteractionState.ts";
 
 export type Phase = "draw" | "discard" | "roll" | "move" | "tile" | "end";
 export type HandCardInteractionMode = "discard" | "play" | "disabled";
-
-export type TileDraft =
-  | { tile: "water"; mode: "single" }
-  | { tile: "wind"; mode: "single" }
-  | { tile: "serpent"; mode: "single" }
-  | { tile: "earth"; mode: "single" | "lair"; cells: { row: number; col: number }[] }
-  | { tile: "shadow"; mode: "single"; wyrmIds: WyrmId[] }
-  | { tile: "shadow"; mode: "lair"; wyrmId: WyrmId | null }
-  | { tile: "light"; mode: "single" | "lair" }
-  | { tile: "void"; mode: "single"; opponentId: PlayerId | null; cells: { row: number; col: number }[] }
-  | { tile: "void"; mode: "lair"; opponentId: PlayerId | null }
-  | { tile: "serpent"; mode: "lair" };
 
 export interface MatchInstructionInput {
   state: GameState;
@@ -38,6 +29,9 @@ export interface MatchInstructionInput {
   hasSelectedMove: boolean;
   canConfirmMove: boolean;
   hoardChoicesCount: number;
+  interactionState?: InteractionState;
+  stepsRemaining?: number;
+  tileDraftReady?: boolean;
 }
 
 export interface DeployOverlayVisibilityInput {
@@ -52,6 +46,7 @@ export interface HandCardInteractionInput {
   phase: Phase;
   isPaused: boolean;
   canPlayTiles: boolean;
+  isInteractionLocked?: boolean;
 }
 
 export interface PrimaryActionConfigInput {
@@ -193,8 +188,9 @@ export function getHandCardInteractionMode({
   phase,
   isPaused,
   canPlayTiles,
+  isInteractionLocked = false,
 }: HandCardInteractionInput): HandCardInteractionMode {
-  if (isPaused || phase === "end") {
+  if (isPaused || phase === "end" || isInteractionLocked) {
     return "disabled";
   }
 
@@ -315,38 +311,63 @@ export function getMatchInstructionMeta({
   hasSelectedMove,
   canConfirmMove,
   hoardChoicesCount,
+  interactionState,
+  stepsRemaining = 0,
+  tileDraftReady = false,
 }: MatchInstructionInput): string | null {
   const phase = getMatchPhase(state);
   const deployAvailable = hasHoardDeployOpportunity(state, hoardChoicesCount);
 
   if (tileDraft) {
     switch (tileDraft.tile) {
+      case "fire":
+        return tileDraftReady
+          ? "Previewing every one of your trails. Confirm to burn them away, or cancel."
+          : "Previewing every one of your trails.";
       case "water":
-        return "Select one of your active Wyrms. It can pass through a single trail this turn.";
+        return tileDraftReady
+          ? "Preview ready. Confirm Flow to grant that Wyrm one trail pass this turn."
+          : "Select one of your active Wyrms for Flow.";
       case "wind":
-        return "Select one of your active Wyrms. It gets +2 movement this turn.";
+        return tileDraftReady
+          ? "Preview ready. Confirm Gust to give that Wyrm +2 movement."
+          : "Select one of your active Wyrms for Gust.";
       case "earth":
-        return `Choose ${tileDraft.mode === "lair" ? "three" : "one"} empty cell${
+        return `${tileDraftReady ? "Preview ready. Confirm after checking the wall placement. " : ""}Choose ${tileDraft.mode === "lair" ? "three" : "one"} empty cell${
           tileDraft.mode === "lair" ? "s" : ""
         } to place Stone.`;
       case "shadow":
         return tileDraft.mode === "single"
-          ? "Choose two of your Wyrms to swap positions."
+          ? tileDraftReady
+            ? "Preview ready. Confirm to swap the two highlighted Wyrms."
+            : "Choose two of your Wyrms to swap positions."
           : tileDraft.wyrmId
-            ? "Choose any empty cell to teleport this Wyrm."
+            ? tileDraftReady
+              ? "Preview ready. Confirm to teleport the selected Wyrm."
+              : "Choose any empty cell to teleport this Wyrm."
             : "Choose a Wyrm on the board or in your hoard to teleport.";
       case "light":
-        return "Choose which opponent should reveal their hand or be blinded.";
+        return tileDraftReady
+          ? "Preview ready. Confirm to target the highlighted opponent."
+          : "Choose which opponent should reveal their hand or be blinded.";
       case "void":
         return tileDraft.mode === "single"
           ? tileDraft.opponentId
-            ? "Select up to 3 trail markers from that opponent."
+            ? tileDraftReady
+              ? "Preview ready. Confirm to erase the highlighted enemy trails."
+              : "Select up to 3 trail markers from that opponent."
             : "Choose which opponent's trails you want to erase."
-          : "Choose one player color to erase completely.";
+          : tileDraftReady
+            ? "Preview ready. Confirm to erase every trail of that color."
+            : "Choose one player color to erase completely.";
       case "serpent":
         return tileDraft.mode === "single"
-          ? "Choose the Wyrm whose trail should last longer."
-          : "Choose a non-Elder Wyrm to promote instantly.";
+          ? tileDraftReady
+            ? "Preview ready. Confirm to extend that Wyrm's trail duration."
+            : "Choose the Wyrm whose trail should last longer."
+          : tileDraftReady
+            ? "Preview ready. Confirm to promote the highlighted Wyrm instantly."
+            : "Choose a non-Elder Wyrm to promote instantly.";
       default:
         return null;
     }
@@ -361,9 +382,14 @@ export function getMatchInstructionMeta({
   }
 
   if (hasSelectedMove) {
-    return canConfirmMove
-      ? "Selected Wyrm is highlighted. Confirm this path when you're ready."
-      : "Selected Wyrm is highlighted. Legal destinations glow on the board.";
+    if (interactionState === "moving") {
+      return stepsRemaining > 0
+        ? `Build the path one step at a time. ${stepsRemaining} step${stepsRemaining === 1 ? "" : "s"} remaining.`
+        : canConfirmMove
+          ? "Path is ready. Finish the move when you're ready."
+          : "Path is ready.";
+    }
+    return "Selected Wyrm is highlighted. Start plotting the path with an adjacent step.";
   }
 
   if (phase === "discard") {
@@ -454,52 +480,57 @@ export function getTileSelectionPreview(tileDraft: TileDraft | null): TileSelect
   }
 
   switch (tileDraft.tile) {
+    case "fire":
+      return {
+        title: getTileName(tileDraft.tile),
+        detail: "Preview your own trails, then confirm to burn them away.",
+      };
     case "water":
       return {
         title: getTileName(tileDraft.tile),
-        detail: "Select one Wyrm. It may pass through one trail this turn.",
+        detail: "Select one Wyrm, preview the lane it opens, then confirm.",
       };
     case "wind":
       return {
         title: getTileName(tileDraft.tile),
-        detail: "Select one Wyrm. It gains +2 movement this turn.",
+        detail: "Select one Wyrm, preview the burst, then confirm.",
       };
     case "earth":
       return {
         title: getTileName(tileDraft.tile),
         detail:
           tileDraft.mode === "lair"
-            ? "Pick 3 empty cells to place permanent wall tiles."
-            : "Pick 1 empty cell to place a permanent wall tile.",
+            ? "Pick 3 empty cells, preview the wall line, then confirm."
+            : "Pick 1 empty cell, preview the wall, then confirm.",
       };
     case "shadow":
       return {
         title: getTileName(tileDraft.tile),
         detail:
           tileDraft.mode === "lair"
-            ? "Teleport one Wyrm to any empty cell."
-            : "Choose 2 of your Wyrms and swap their positions.",
+            ? "Choose one Wyrm and a destination, preview the teleport, then confirm."
+            : "Choose 2 of your Wyrms, preview the swap, then confirm.",
       };
     case "light":
       return {
         title: getTileName(tileDraft.tile),
-        detail: "Choose one opponent to reveal or disrupt.",
+        detail: "Choose one opponent, preview the target, then confirm.",
       };
     case "void":
       return {
         title: getTileName(tileDraft.tile),
         detail:
           tileDraft.mode === "lair"
-            ? "Choose one player color and erase every trail of that color."
-            : "Pick one opponent, then remove up to 3 of their trail markers.",
+            ? "Choose one player color, preview every affected trail, then confirm."
+            : "Pick one opponent, preview up to 3 of their trail markers, then confirm.",
       };
     case "serpent":
       return {
         title: getTileName(tileDraft.tile),
         detail:
           tileDraft.mode === "lair"
-            ? "Promote one non-Elder Wyrm instantly."
-            : "Choose one Wyrm to extend its trail and boost its next turn.",
+            ? "Choose one non-Elder Wyrm, preview the promotion, then confirm."
+            : "Choose one Wyrm, preview its longer trail window, then confirm.",
       };
   }
 }

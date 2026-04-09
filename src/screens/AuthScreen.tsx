@@ -20,7 +20,7 @@ export function AuthScreen({
   onSubmit,
   onGuestPlay,
 }: AuthScreenProps): React.JSX.Element {
-  const [form, setForm] = useState<AuthFormState>({ username: "", password: "" });
+  const [form, setForm] = useState<AuthFormState>({ username: "", password: "" }); // password kept in type for compat but not collected
   const autoGuest = useMemo(
     () => new URLSearchParams(window.location.search).get("guest") === "true",
     [],
@@ -35,7 +35,7 @@ export function AuthScreen({
   }, [autoGuest, onGuestPlay]);
 
   const canSubmit = useMemo(
-    () => form.username.trim().length > 1 && form.password.trim().length > 2,
+    () => form.username.trim().length > 1,
     [form],
   );
 
@@ -57,7 +57,7 @@ export function AuthScreen({
         <Wordmark
           href="/"
           className="auth-card__wordmark"
-          tagline="The Tome opens only to those who speak their name with conviction."
+          tagline="Choose a display name to enter the Tome."
         />
 
         <form
@@ -67,41 +67,27 @@ export function AuthScreen({
             if (!canSubmit) {
               return;
             }
-            onSubmit(form);
+            onSubmit({ ...form, password: "" });
           }}
         >
           <label className="field">
-            <span>Username</span>
+            <span>Display name</span>
             <input
               type="text"
               value={form.username}
               placeholder="Sable Quill"
+              autoComplete="off"
               onChange={(event) =>
                 setForm((current) => ({ ...current, username: event.target.value }))
               }
             />
           </label>
 
-          <label className="field">
-            <span>Password</span>
-            <input
-              type="password"
-              value={form.password}
-              placeholder="••••••••"
-              onChange={(event) =>
-                setForm((current) => ({ ...current, password: event.target.value }))
-              }
-            />
-          </label>
 
           {error ? <ScreenError message={error} /> : null}
 
           <button type="submit" className="button button--forest" disabled={!canSubmit || pendingAction === "auth"}>
-            {pendingAction === "auth" ? <LoadingPulse label="Opening Tome" /> : "Sign in"}
-          </button>
-
-          <button type="button" className="text-link">
-            Forgot password?
+            {pendingAction === "auth" ? <LoadingPulse label="Opening Tome" /> : "Enter the Tome"}
           </button>
           
           <button 
