@@ -32,8 +32,20 @@ assert.match(
 
 assert.match(
   css,
-  /\.match-layout-shell\s*\{[^}]*grid-template-columns:\s*[^;]*minmax\(0,\s*1fr\)[^;]*\}/s,
+  /\.match-layout-shell\s*\{[^}]*grid-template-columns:\s*[^;]*minmax\(0,\s*1fr\)[^;]*;?\s*\}/s,
   "the match screen should define a three-column shell so the board stays centered between fixed sidebars",
+);
+
+assert.match(
+  css,
+  /\.match-layout-shell\s*\{[^}]*grid-template-columns:\s*clamp\([^;]*\)\s+minmax\(0,\s*1fr\)\s+clamp\([^;]*;?\s*\}/s,
+  "the match shell should use responsive sidebar widths so the board keeps space on common laptop viewports",
+);
+
+assert.match(
+  css,
+  /@media \(max-height:\s*960px\)[\s\S]*\.match-layout-shell\s*\{[\s\S]*grid-template-columns:/s,
+  "shorter laptop viewports should activate a compact board-first layout mode instead of relying on browser zoom changes",
 );
 
 assert.match(
@@ -52,6 +64,24 @@ assert.match(
   matchScreen,
   /match-layout-shell[\s\S]*match-sidebar match-sidebar--left[\s\S]*match-main-column[\s\S]*match-sidebar match-sidebar--right/s,
   "the central board column should sit between the left and right sidebars",
+);
+
+assert.doesNotMatch(
+  matchScreen,
+  /width:\s*'min\(100%,\s*72rem\)'/,
+  "the board stage should not hard-cap itself to 72rem when the goal is to keep the full board visible at 100% zoom",
+);
+
+assert.match(
+  matchScreen,
+  /const container = boardScrollRef\.current;/,
+  "board sizing should measure the actual scroll viewport instead of the outer decorated stage",
+);
+
+assert.doesNotMatch(
+  matchScreen,
+  /Math\.floor\(Math\.min\(width,\s*height\)\s*\/\s*12\)/,
+  "board cell sizing should account for grid gaps and viewport padding instead of dividing the raw stage box",
 );
 
 assert.doesNotMatch(

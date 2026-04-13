@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import { ConnectionBanner } from "../components/ConnectionBanner.tsx";
 import { LoadingPulse } from "../components/LoadingPulse.tsx";
 import { ScreenError } from "../components/ScreenError.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
+import type { ConnectionBannerStatus } from "../online/reconnectModel.ts";
 import type { MatchRecord, UserProfile } from "../ui/appModel.ts";
 
 interface LobbyScreenProps {
@@ -12,6 +14,9 @@ interface LobbyScreenProps {
   pendingAction: string | null;
   error: string | null;
   onNavigate: (href: string) => void;
+  connectionStatus?: ConnectionBannerStatus;
+  connectionAttemptCount?: number;
+  onRetryConnection?: () => void;
   autoCreateRoomOnMount?: boolean;
   onConsumeAutoCreateRoom?: () => void;
   onCreateAssembly: () => void;
@@ -44,6 +49,9 @@ export function LobbyScreen({
   pendingAction,
   error,
   onNavigate,
+  connectionStatus = "connected",
+  connectionAttemptCount = 0,
+  onRetryConnection,
   autoCreateRoomOnMount = false,
   onConsumeAutoCreateRoom,
   onCreateAssembly,
@@ -72,6 +80,12 @@ export function LobbyScreen({
 
   return (
     <main className="shell-page lobby-screen">
+      <ConnectionBanner
+        status={connectionStatus}
+        attemptCount={connectionAttemptCount}
+        onRetry={onRetryConnection}
+        onGoToLobby={() => onNavigate("/lobby")}
+      />
       <aside className="shell-sidebar">
         <Wordmark href="/lobby" onNavigate={onNavigate} />
 

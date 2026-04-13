@@ -32,11 +32,21 @@ export function LandingScreen({ onNavigate }: LandingScreenProps): React.JSX.Ele
           </button>
         </div>
         <div className="landing-hero__preview">
-          <img
-            src="/favicon.svg"
-            alt="WYRM board preview"
-            className="landing-hero__preview-img"
-          />
+          <svg viewBox="0 0 160 160" width="160" height="160" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" className="landing-hero__board-glyph">
+            <rect width="160" height="160" rx="18" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.1)" strokeWidth="1"/>
+            {[40, 80, 120].map((v) => (
+              <g key={v}>
+                <line x1={v} y1="8" x2={v} y2="152" stroke="rgba(255,255,255,0.08)" strokeWidth="1"/>
+                <line x1="8" y1={v} x2="152" y2={v} stroke="rgba(255,255,255,0.08)" strokeWidth="1"/>
+              </g>
+            ))}
+            <rect x="62" y="62" width="36" height="36" rx="4" fill="rgba(184,134,11,0.55)"/>
+            <circle cx="20" cy="20" r="10" fill="#6b5aa8"/>
+            <circle cx="140" cy="140" r="10" fill="#b8860b"/>
+            <rect x="34" y="14" width="12" height="12" rx="2" fill="rgba(107,90,168,0.45)"/>
+            <rect x="14" y="34" width="12" height="12" rx="2" fill="rgba(107,90,168,0.45)"/>
+            <rect x="134" y="114" width="12" height="12" rx="2" fill="rgba(184,134,11,0.45)"/>
+          </svg>
         </div>
       </section>
 

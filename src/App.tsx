@@ -595,6 +595,8 @@ function AppShell(): React.JSX.Element {
           pendingAction={pendingAction}
           error={error}
           onNavigate={navigatePath}
+          connectionStatus="connected"
+          connectionAttemptCount={0}
           autoCreateRoomOnMount={lobbyIntentState.shouldAutoCreate}
           onConsumeAutoCreateRoom={() => setLobbyIntent(lobbyIntentState.nextIntent)}
           onCreateAssembly={handleCreateAssembly}
@@ -882,6 +884,21 @@ function AppShell(): React.JSX.Element {
             onNavigate={navigatePath}
             onAbandonMatch={() => navigate({ name: "lobby" })}
             onOpenGuide={() => setGuideOpen(true)}
+            onMatchComplete={(finalState) => {
+              const record: MatchRecord = {
+                ...buildMatchRecord(
+                  finalState,
+                  localRoom,
+                  profile ?? createGuestProfile(),
+                  sessionCounter,
+                  [],
+                ),
+                id: `local-${Date.now().toString(36)}`,
+              };
+              setCompletedMatches((current) => ({ ...current, [record.id]: record }));
+              setSessionCounter((current) => current + 1);
+              navigate({ name: "results", matchId: record.id });
+            }}
             showGuestChip={Boolean(profile?.isGuest && !guestBannerDismissed)}
             onDismissGuestChip={() => setGuestBannerDismissed(true)}
             localMode
@@ -908,21 +925,20 @@ function AppShell(): React.JSX.Element {
             return room.seats.some(s => !s.currentUser && s.occupied);
           }}
           onForgeAnew={() => {
-            if (!profile) return;
-            // Local match: go back to the local setup screen for a fresh game
-            if (currentRecord.id === "local") {
-              navigate({ name: "local_setup" });
+            if (currentRecord.roomId === "local") {
+              navigatePath("/local");
               return;
             }
+            if (!profile) return;
             // Online match: rematch invite not yet implemented
           }}
           forgeAnewLabel={
-            currentRecord.id === "local"
+            currentRecord.roomId === "local"
               ? "Play again"
               : undefined
           }
           forgeAnewDisabled={
-            currentRecord.id !== "local"
+            currentRecord.roomId !== "local"
           }
           forgeAnewDisabledLabel="Rematch invite — coming soon"
           onViewChronicle={() => navigate({ name: "chronicle", matchId: currentRecord.id })}
@@ -947,6 +963,8 @@ function AppShell(): React.JSX.Element {
         pendingAction={pendingAction}
         error="That page was not bound into the Tome. You have been returned to the lobby."
         onNavigate={navigatePath}
+        connectionStatus="connected"
+        connectionAttemptCount={0}
         onCreateAssembly={handleCreateAssembly}
         onFindOpponent={() => navigate({ name: "lobby" })}
         onJoinAssembly={() => navigate({ name: "lobby" })}

@@ -71,6 +71,12 @@ assert.doesNotMatch(
   "floating board identity labels should be removed once identity lives in the sidebars",
 );
 
+assert.doesNotMatch(
+  matchScreen,
+  /legacy-player-tag/,
+  "legacy floating player tags should stay out of the board once the sidebars carry player identity",
+);
+
 assert.match(
   css,
   /\.draw-feedback-card\s*\{/,

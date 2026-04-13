@@ -51,18 +51,10 @@ function PreferenceToggle({
   onChange: (checked: boolean) => void;
 }): React.JSX.Element {
   return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "1rem",
-        padding: "0.85rem 0",
-      }}
-    >
-      <div style={{ display: "grid", gap: "0.25rem" }}>
+    <label className="settings-toggle">
+      <div className="settings-toggle__copy">
         <strong>{label}</strong>
-        <span style={{ color: "var(--ink-700)", lineHeight: 1.5 }}>{description}</span>
+        <span>{description}</span>
       </div>
       <input
         type="checkbox"
@@ -73,22 +65,6 @@ function PreferenceToggle({
     </label>
   );
 }
-
-const sectionCardStyle: React.CSSProperties = {
-  display: "grid",
-  gap: "1rem",
-  padding: "1.25rem",
-  borderRadius: "1.4rem",
-  background: "rgba(248, 243, 230, 0.92)",
-  boxShadow: "var(--shadow-md)",
-};
-
-const dividerStyle: React.CSSProperties = {
-  border: 0,
-  borderTop: "1px solid rgba(26, 46, 26, 0.12)",
-  width: "100%",
-  margin: 0,
-};
 
 export function SettingsScreen({
   profile,
@@ -119,7 +95,6 @@ export function SettingsScreen({
     onSaveDisplayName(trimmed);
     setDisplayNameSaved(true);
   };
-
 
   const handleClearHistory = () => {
     if (matchHistory.length === 0) {
@@ -155,11 +130,8 @@ export function SettingsScreen({
         </div>
       </aside>
 
-      <section className="shell-main lobby-main">
-        <header
-          className="section-header"
-          style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem" }}
-        >
+      <section className="shell-main settings-main">
+        <header className="section-header">
           <div>
             <p>Account & Preferences</p>
             <h1>Settings</h1>
@@ -169,8 +141,8 @@ export function SettingsScreen({
           </button>
         </header>
 
-        <div style={{ display: "grid", gap: "1.5rem", alignContent: "start" }}>
-          <section style={sectionCardStyle}>
+        <div className="settings-grid">
+          <section className="settings-card">
             <div className="section-heading">
               <p>Section 1</p>
               <h2>Account</h2>
@@ -221,9 +193,9 @@ export function SettingsScreen({
             )}
           </section>
 
-          <hr style={dividerStyle} />
+          <hr className="settings-divider" />
 
-          <section style={sectionCardStyle}>
+          <section className="settings-card">
             <div className="section-heading">
               <p>Section 2</p>
               <h2>Preferences</h2>
@@ -235,7 +207,7 @@ export function SettingsScreen({
               checked={animationsEnabled}
               onChange={onToggleAnimations}
             />
-            <hr style={dividerStyle} />
+            <hr className="settings-divider" />
             <PreferenceToggle
               label="Sound effects"
               description="Coming soon — your preference is saved for when audio lands."
@@ -244,9 +216,9 @@ export function SettingsScreen({
             />
           </section>
 
-          <hr style={dividerStyle} />
+          <hr className="settings-divider" />
 
-          <section style={sectionCardStyle}>
+          <section className="settings-card">
             <div className="section-heading">
               <p>Section 3</p>
               <h2>Match History</h2>

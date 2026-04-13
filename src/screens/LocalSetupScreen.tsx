@@ -16,12 +16,9 @@ const PLAYER_COLORS = ["purple", "coral", "teal", "amber"] as const;
 export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenProps): React.JSX.Element {
   const [playerCount, setPlayerCount] = useState<PlayerCount>(2);
 
-  // Keyed by actual game player ID (from PLAYER_ORDER_BY_COUNT), not slot index
-  const [playerNames, setPlayerNames] = useState<Record<number, string>>({
-    1: "Player 1",
-    2: "Player 2",
-    3: "Player 3",
-    4: "Player 4",
+  const [playerNames, setPlayerNames] = useState<Record<number, string>>(() => {
+    const ids = PLAYER_ORDER_BY_COUNT[2];
+    return Object.fromEntries(ids.map((id, i) => [id, `Player ${i + 1}`]));
   });
   const [playerTypes, setPlayerTypes] = useState<Record<number, "human" | BotDifficulty>>({
     1: "human",
@@ -62,21 +59,18 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
           <h1>Local Game</h1>
         </header>
 
-        <div className="local-setup-content" style={{ maxWidth: "600px", marginTop: "2rem" }}>
-          <div className="field-group" style={{ marginBottom: "3rem" }}>
+        <div className="local-setup-panel">
+          <div className="local-setup-panel__group">
             <label className="field">
-              <span style={{ fontSize: "0.875rem", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.5rem", display: "block" }}>Player Count</span>
+              <span>Player Count</span>
               <select
                 value={playerCount}
-                onChange={(e) => setPlayerCount(Number(e.target.value) as PlayerCount)}
-                style={{
-                  padding: "0.75rem",
-                  backgroundColor: "var(--color-parchment-soft, #fdfbfa)",
-                  border: "1px solid var(--color-ink-muted, #888)",
-                  borderRadius: "4px",
-                  fontSize: "1rem",
-                  width: "100%",
-                  fontFamily: "var(--font-body)",
+                onChange={(e) => {
+                  const count = Number(e.target.value) as PlayerCount;
+                  setPlayerCount(count);
+                  const ids = PLAYER_ORDER_BY_COUNT[count];
+                  setPlayerNames(Object.fromEntries(ids.map((id, i) => [id, `Player ${i + 1}`])));
+                  setPlayerTypes(Object.fromEntries(ids.map((id, i) => [id, i === 0 ? "human" : "human"])));
                 }}
               >
                 <option value={2}>2 Players</option>
@@ -86,18 +80,18 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
             </label>
           </div>
 
-          <div className="player-slots" style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+          <div className="local-player-list">
             {activePlayerIds.map((playerId, i) => {
               const colorName = PLAYER_COLORS[i];
               const colorHex = PLAYER_PALETTE[colorName].base;
               const selectedType = i === 0 ? "human" : playerTypes[playerId];
 
               return (
-                <div key={playerId} style={{ display: "flex", alignItems: "flex-start", gap: "1.5rem", backgroundColor: "white", padding: "1.5rem", borderRadius: "8px", border: "1px solid var(--color-ink-muted, #888)" }}>
-                  <div style={{ width: "24px", height: "24px", borderRadius: "50%", backgroundColor: colorHex, flexShrink: 0, marginTop: "0.5rem" }} />
-                  <div style={{ flexGrow: 1, display: "flex", gap: "1rem" }}>
-                    <label className="field" style={{ flexGrow: 1, margin: 0 }}>
-                      <span style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.875rem", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px" }}>
+                <div key={playerId} className="local-player-card">
+                  <div className="local-player-card__dot" style={{ backgroundColor: colorHex }} />
+                  <div className="local-player-card__fields">
+                    <label className="field">
+                      <span>
                         Player {i + 1} <span style={{ color: "var(--color-ink-muted, #888)", fontWeight: "normal" }}>({colorName})</span>
                       </span>
                       <input
@@ -105,20 +99,11 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
                         value={playerNames[playerId]}
                         onChange={(e) => setPlayerNames(prev => ({ ...prev, [playerId]: e.target.value }))}
                         disabled={selectedType !== "human"}
-                        style={{
-                          width: "100%",
-                          padding: "0.75rem",
-                          boxSizing: "border-box",
-                          border: "1px solid var(--color-ink-muted, #888)",
-                          borderRadius: "4px",
-                          fontFamily: "var(--font-body)",
-                          fontSize: "1rem",
-                          opacity: selectedType !== "human" ? 0.6 : 1,
-                        }}
+                        style={{ opacity: selectedType !== "human" ? 0.6 : 1 }}
                       />
                     </label>
-                    <label className="field" style={{ width: "140px", margin: 0 }}>
-                      <span style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.875rem", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px" }}>Type</span>
+                    <label className="field">
+                      <span>Type</span>
                       <select
                         value={i === 0 ? "human" : playerTypes[playerId]}
                         disabled={i === 0}
@@ -130,15 +115,6 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
                           } else {
                             setPlayerNames(prev => ({ ...prev, [playerId]: `Player ${i + 1}` }));
                           }
-                        }}
-                        style={{
-                          width: "100%",
-                          padding: "0.75rem",
-                          boxSizing: "border-box",
-                          border: "1px solid var(--color-ink-muted, #888)",
-                          borderRadius: "4px",
-                          fontFamily: "var(--font-body)",
-                          fontSize: "1rem",
                         }}
                       >
                         <option value="human">Human</option>
@@ -155,11 +131,10 @@ export function LocalSetupScreen({ onNavigate, onStartGame }: LocalSetupScreenPr
             })}
           </div>
 
-          <div style={{ marginTop: "3rem" }}>
+          <div className="local-setup-actions">
             <button
               type="button"
               className="button button--forest"
-              style={{ padding: "1rem 2rem", fontSize: "1.25rem" }}
               onClick={handleStart}
             >
               Start Game

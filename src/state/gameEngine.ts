@@ -693,7 +693,7 @@ export function actionPlayTile(state: GameState, request: TilePlayRequest): Game
       case "water": {
         commitCards();
         player.floodPathTurnsRemaining = Math.max(player.floodPathTurnsRemaining, 4);
-        appendLog(next, `${PLAYER_NAMES[player.id]} activated Flood Path for the next three turns.`);
+        appendLog(next, `${PLAYER_NAMES[player.id]} activated Flood Path — trails passable for the next 3 turns.`);
         break;
       }
       case "earth": {
@@ -713,7 +713,8 @@ export function actionPlayTile(state: GameState, request: TilePlayRequest): Game
         commitCards();
         next.turnEffects.tempestRushRemaining = getControlledActiveWyrms(next, player.id).map((wyrm) => wyrm.id);
         next.phase = "move";
-        appendLog(next, `${PLAYER_NAMES[player.id]} can make three bonus Tempest Rush moves.`);
+        const rushCount = next.turnEffects.tempestRushRemaining.length;
+        appendLog(next, `${PLAYER_NAMES[player.id]} can make ${rushCount} bonus Tempest Rush move${rushCount === 1 ? "" : "s"}.`);
         break;
       }
       case "shadow": {

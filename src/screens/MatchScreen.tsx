@@ -8,7 +8,7 @@ import {
   getContextTooltipTriggers,
   type ContextTooltipTriggerSnapshot,
 } from "../components/contextTooltipTriggerModel.ts";
-import { getControlledActiveWyrms } from "../state/gameLogic.ts";
+import { getControlledActiveWyrms, TILE_HELP } from "../state/gameLogic.ts";
 import {
   getMoveConsequenceSummary,
   getProjectedReachableCellsFromPrefix,
@@ -51,6 +51,7 @@ import {
 } from "../ui/matchInteractionModel.ts";
 import { MATCH_MOTION_MS, getResponsiveMotionMode } from "../ui/matchMotion.ts";
 import { useMatchInteractions } from "../ui/useMatchInteractions.ts";
+import { getMatchBoardCellSize } from "./matchBoardSizing.ts";
 
 const LOCAL_PLAYER_COLORS: PlayerColor[] = ["purple", "coral", "teal", "amber"];
 const TURN_PROGRESS_STEPS = [
@@ -91,6 +92,7 @@ interface MatchScreenProps {
   onAbandonMatch: () => void;
   onOpenGuide: () => void;
   onRestartMatch?: () => void;
+  onMatchComplete?: (finalState: GameState) => void;
   showGuestChip?: boolean;
   onDismissGuestChip?: () => void;
   localMode?: boolean;
@@ -424,6 +426,7 @@ export function MatchScreen({
   onAbandonMatch,
   onOpenGuide,
   onRestartMatch,
+  onMatchComplete,
   showGuestChip = false,
   onDismissGuestChip,
   localMode = false,
@@ -572,10 +575,22 @@ export function MatchScreen({
   }, [localMode, room]);
 
   const playerLabels = useMemo<Record<PlayerId, string>>(() => ({
-    1: localPlayerBots?.[1] ? `${playerNames[1]} (${localPlayerBots[1]})` : playerNames[1],
-    2: localPlayerBots?.[2] ? `${playerNames[2]} (${localPlayerBots[2]})` : playerNames[2],
-    3: localPlayerBots?.[3] ? `${playerNames[3]} (${localPlayerBots[3]})` : playerNames[3],
-    4: localPlayerBots?.[4] ? `${playerNames[4]} (${localPlayerBots[4]})` : playerNames[4],
+    1:
+      localPlayerBots?.[1] && !playerNames[1].toLowerCase().includes(localPlayerBots[1].toLowerCase())
+        ? `${playerNames[1]} (${localPlayerBots[1]})`
+        : playerNames[1],
+    2:
+      localPlayerBots?.[2] && !playerNames[2].toLowerCase().includes(localPlayerBots[2].toLowerCase())
+        ? `${playerNames[2]} (${localPlayerBots[2]})`
+        : playerNames[2],
+    3:
+      localPlayerBots?.[3] && !playerNames[3].toLowerCase().includes(localPlayerBots[3].toLowerCase())
+        ? `${playerNames[3]} (${localPlayerBots[3]})`
+        : playerNames[3],
+    4:
+      localPlayerBots?.[4] && !playerNames[4].toLowerCase().includes(localPlayerBots[4].toLowerCase())
+        ? `${playerNames[4]} (${localPlayerBots[4]})`
+        : playerNames[4],
   }), [localPlayerBots, playerNames]);
 
   const currentPlayerColor = getColorValue(playerColors[currentPlayer.id]);
@@ -612,6 +627,13 @@ export function MatchScreen({
     phase === "discard" ? "draw" : phase === "end" ? "tile" : phase;
   const turnProgressStepIndex = TURN_PROGRESS_STEPS.findIndex((step) => step.key === turnProgressPhase);
   const showVictoryOverlay = state.winner !== null;
+  const matchCompleteCalledRef = useRef(false);
+  useEffect(() => {
+    if (state.winner !== null && onMatchComplete && !matchCompleteCalledRef.current) {
+      matchCompleteCalledRef.current = true;
+      onMatchComplete(state);
+    }
+  }, [state.winner, state, onMatchComplete]);
   const victoryOverlayCopy = getVictoryOverlayCopy(state, playerNames);
   const victoryAccentColor = state.winner ? getColorValue(playerColors[state.winner]) : currentPlayerColor;
   const canRestartMatch = localMode || Boolean(onRestartMatch);
@@ -949,9 +971,9 @@ export function MatchScreen({
         detail:
           handCardInteractionMode === "play"
             ? copies >= 3
-              ? "Invoke or use Lair x3"
+              ? "Invoke or use Lair ×3"
               : "Tap to preview"
-            : "Unavailable right now",
+            : TILE_HELP[tile],
         active,
         onActivate: handCardInteractionMode === "play" ? () => startTileDraft(tile, "single") : undefined,
         onPlayLair:
@@ -1053,7 +1075,7 @@ export function MatchScreen({
     && !state.turnEffects.mainMoveCompleted;
 
   useEffect(() => {
-    const container = boardRef.current;
+    const container = boardScrollRef.current;
     if (!container) return;
 
     const observer = new ResizeObserver((entries) => {
@@ -1061,25 +1083,13 @@ export function MatchScreen({
       if (entry) {
         const width = entry.contentRect.width > 0 ? entry.contentRect.width : container.clientWidth;
         const height = entry.contentRect.height > 0 ? entry.contentRect.height : container.clientHeight;
-        
-        let newSize = Math.floor(Math.min(width, height) / 12);
-        
-        if (state.board[0]) {
-          const cols = state.board[0].length;
-          const rows = state.board.length;
-          const maxByWidth = Math.floor(width / cols);
-          const maxByHeight = Math.floor(height / rows);
-          
-          if (newSize * cols > width) {
-            newSize = maxByHeight;
-            if (newSize * cols > width) {
-                newSize = maxByWidth;
-            }
-          }
-        }
-        
-        if (newSize < 32) newSize = 32;
-        if (newSize > 56) newSize = 56;
+
+        const newSize = getMatchBoardCellSize({
+          viewportWidth: width,
+          viewportHeight: height,
+          cols: state.board[0]?.length ?? 12,
+          rows: state.board.length,
+        });
         setCellSize(newSize);
       }
     });
@@ -1402,6 +1412,11 @@ export function MatchScreen({
               <button type="button" className="button button--outline" onClick={onAbandonMatch}>
                 Exit Game
               </button>
+              {onMatchComplete ? (
+                <button type="button" className="button button--ghost" onClick={() => onMatchComplete(state)}>
+                  View Results
+                </button>
+              ) : null}
             </div>
           </article>
         </div>
@@ -1609,7 +1624,7 @@ export function MatchScreen({
           <div
             className={isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage"}
             ref={boardRef}
-            style={{ position: 'relative', width: 'min(100%, 72rem)', height: '100%', maxHeight: '100%' }}
+            style={{ position: "relative", width: "100%", height: "100%", maxHeight: "100%" }}
           >
             {/* Floating clear selection */}
             {!isPaused && phase !== "end" && hasClearableInteraction ? (
@@ -1652,53 +1667,6 @@ export function MatchScreen({
                 </button>
               </div>
             ) : null}
-
-            {/* Deck / Discard preview */}
-            <div className="deck-discard-preview">
-              <div className="match-deck-panel" title="Draw rune tiles">
-                <div ref={deckCountRef} className="match-deck-panel__stack" aria-label={`Deck: ${state.deck.length} rune tiles`}>
-                  <span className="match-deck-panel__card match-deck-panel__card--back" aria-hidden="true" />
-                  <span className="match-deck-panel__card match-deck-panel__card--mid" aria-hidden="true" />
-                  <span className="match-deck-panel__card match-deck-panel__card--front" aria-hidden="true" />
-                  <span className="match-deck-panel__count">{state.deck.length}</span>
-                </div>
-                <span className="match-deck-panel__label">Deck</span>
-                <span className="match-deck-panel__caption">Draw rune tiles</span>
-              </div>
-              <button
-                type="button"
-                className="match-discard-panel"
-                title="Open discard pile"
-                onClick={() => setShowDiscardModal(true)}
-              >
-                <div className="match-discard-panel__stack">
-                  {state.discardPile.length > 0 ? (
-                    <div className="match-discard-panel__preview">
-                      <RuneTileCard tile={state.discardPile[state.discardPile.length - 1]} copies={1} />
-                    </div>
-                  ) : (
-                    <div className="match-discard-panel__empty" />
-                  )}
-                </div>
-                <span className="match-deck-panel__label">Discard</span>
-              </button>
-            </div>
-
-            {state.players.map((player) => (
-              <div
-                key={player.id}
-                className={[
-                  "legacy-player-tag",
-                  `legacy-player-tag--${player.id}`,
-                  player.id === currentPlayer.id ? "legacy-player-tag--active" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                style={{ "--player-label-color": getColorValue(playerColors[player.id]) } as React.CSSProperties}
-              >
-                <span className="legacy-player-tag__name">{playerNames[player.id]}</span>
-              </div>
-            ))}
 
             {/* Peek hand (inline floating) */}
             {visiblePeekHand.length > 0 ? (
@@ -2055,6 +2023,39 @@ export function MatchScreen({
                   })}
                 </ol>
               )}
+            </div>
+
+            <div className="match-sidebar__section">
+              <span className="match-sidebar__label">Deck &amp; Discard</span>
+              <div className="deck-discard-preview">
+                <div className="match-deck-panel" title="Draw rune tiles">
+                  <div ref={deckCountRef} className="match-deck-panel__stack" aria-label={`Deck: ${state.deck.length} rune tiles`}>
+                    <span className="match-deck-panel__card match-deck-panel__card--back" aria-hidden="true" />
+                    <span className="match-deck-panel__card match-deck-panel__card--mid" aria-hidden="true" />
+                    <span className="match-deck-panel__card match-deck-panel__card--front" aria-hidden="true" />
+                    <span className="match-deck-panel__count">{state.deck.length}</span>
+                  </div>
+                  <span className="match-deck-panel__label">Deck</span>
+                  <span className="match-deck-panel__caption">Draw rune tiles</span>
+                </div>
+                <button
+                  type="button"
+                  className="match-discard-panel"
+                  title="Open discard pile"
+                  onClick={() => setShowDiscardModal(true)}
+                >
+                  <div className="match-discard-panel__stack">
+                    {state.discardPile.length > 0 ? (
+                      <div className="match-discard-panel__preview">
+                        <RuneTileCard tile={state.discardPile[state.discardPile.length - 1]} copies={1} />
+                      </div>
+                    ) : (
+                      <div className="match-discard-panel__empty" />
+                    )}
+                  </div>
+                  <span className="match-deck-panel__label">Discard</span>
+                </button>
+              </div>
             </div>
 
             <div className="match-sidebar__section match-sidebar__section--opponents">
