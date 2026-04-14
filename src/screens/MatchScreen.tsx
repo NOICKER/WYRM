@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ContextTooltip } from "../components/ContextTooltip.tsx";
 import { RuneTileCard } from "../components/RuneTileCard.tsx";
@@ -352,7 +352,7 @@ function MatchBoardGrid({
               onFocus={() => onCellHover(coord)}
               onBlur={() => onCellHover(null)}
             >
-              {cell.hasPowerRune ? <span className="match-board-cell__rune">â—†</span> : null}
+              {cell.hasPowerRune ? <span className="match-board-cell__rune">{String.fromCharCode(0x25C6)}</span> : null}
               {cell.hasWall ? <span className="match-board-cell__wall">{"\u2715"}</span> : null}
               {cell.trail && state.currentRound <= cell.trail.expiresAfterRound ? (
                 <span

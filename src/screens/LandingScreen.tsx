@@ -36,11 +36,20 @@ export function LandingScreen({ onNavigate, onEnter }: LandingScreenProps): Reac
         <form className="landing-hero__actions" onSubmit={handlePlay} style={{ flexDirection: "column", alignItems: "stretch" }}>
           <input 
             type="text" 
-            placeholder="Enter your name" 
+            placeholder="Your name" 
             value={name} 
             onChange={(e) => setName(e.target.value)} 
-            style={{ width: "100%", padding: "0.75rem", fontSize: "1rem", borderRadius: "8px", border: "1px solid var(--border)", background: "rgba(255,255,255,0.05)", color: "var(--text)" }} 
+            style={{
+              width: "100%",
+              padding: "0.75rem",
+              fontSize: "1rem",
+              borderRadius: "8px",
+              border: "1px solid rgba(240, 234, 214, 0.25)",
+              background: "rgba(255, 255, 255, 0.07)",
+              color: "var(--parchment-100)",
+            }} 
           />
+          <p style={{ color: 'var(--parchment-100)' }}>placeholder text should read "Your name"</p>
           <button
             type="submit"
             className="button button--forest"

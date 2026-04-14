@@ -13,6 +13,8 @@ interface RuneTileCardProps {
   lairReady?: boolean;
   disabled?: boolean;
   className?: string;
+  playable?: boolean;
+  unplayableReason?: string;
   onActivate?: () => void;
   onPlay?: () => void;
   onPlayLair?: () => void;
@@ -26,6 +28,8 @@ export function RuneTileCard({
   lairReady = false,
   disabled = false,
   className,
+  playable,
+  unplayableReason,
   onActivate,
   onPlay,
   onPlayLair,
@@ -37,7 +41,8 @@ export function RuneTileCard({
   const expandTimeoutRef = useRef<number | null>(null);
   const copyCount = copies ?? 0;
   const unlockCount = Math.max(0, 3 - copyCount);
-  const isInteractive = !disabled && Boolean(onActivate);
+  const actuallyDisabled = disabled || playable === false;
+  const isInteractive = !actuallyDisabled && Boolean(onActivate);
 
   const shellClasses = [
     "rune-card-shell",
@@ -51,7 +56,7 @@ export function RuneTileCard({
     active ? "rune-card--active" : "",
     elevated ? "rune-card--elevated" : "",
     lairReady ? "rune-card--lair" : "",
-    disabled ? "rune-card--disabled" : "",
+    actuallyDisabled ? "rune-card--disabled" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -143,7 +148,7 @@ export function RuneTileCard({
       className={shellClasses}
       role={isInteractive ? "button" : undefined}
       tabIndex={isInteractive ? 0 : undefined}
-      aria-disabled={disabled ? true : undefined}
+      aria-disabled={actuallyDisabled ? true : undefined}
       onMouseEnter={() => scheduleExpand(220)}
       onMouseLeave={collapseTooltip}
       onTouchStart={() => scheduleExpand(320)}
@@ -161,8 +166,13 @@ export function RuneTileCard({
     >
       {expanded ? (
         <div ref={tooltipRef} className="rune-card__tooltip" style={tooltipStyle}>
+          {playable === false && unplayableReason && (
+            <div className="rune-card__tooltip-error" style={{ color: 'var(--danger)', marginBottom: '8px', fontWeight: 'bold' }}>
+              Cannot play: {unplayableReason}
+            </div>
+          )}
           <span className="rune-card__tooltip-badge">{getTileBadge(tile)}</span>
-          <strong className="rune-card__tooltip-title">{getTileName(tile)}</strong>
+          <strong className="rune-card__tooltip-title">{getTileName(tile)} Rune</strong>
           <p>
             <span className="rune-card__tooltip-label">Single use:</span> {TILE_HELP[tile]}
           </p>
@@ -191,7 +201,7 @@ export function RuneTileCard({
             <span className="rune-card__badge">{getTileBadge(tile)}</span>
             {typeof copies === "number" ? <span className="rune-card__count">x{copies}</span> : null}
           </div>
-          <h3>{getTileName(tile)}</h3>
+          <h3>{getTileName(tile)} Rune</h3>
           <p>{getTileSummary(tile)}</p>
         </div>
         {(onPlay || onPlayLair) && (
@@ -200,7 +210,7 @@ export function RuneTileCard({
               <button
                 type="button"
                 className="rune-card__button rune-card__button--primary"
-                disabled={disabled}
+                disabled={actuallyDisabled}
                 onClick={(event) => {
                   event.stopPropagation();
                   onPlay();
@@ -213,7 +223,7 @@ export function RuneTileCard({
               <button
                 type="button"
                 className="rune-card__button rune-card__button--ghost"
-                disabled={disabled}
+                disabled={actuallyDisabled}
                 onClick={(event) => {
                   event.stopPropagation();
                   onPlayLair();

@@ -24,6 +24,7 @@
   --shadow-lg: 0 20px 50px rgba(15, 25, 16, 0.18);
   --shadow-md: 0 12px 28px rgba(24, 30, 21, 0.12);
   --ring: rgba(255, 255, 255, 0.9);
+  --den-p2: #F5C4B3;
   --purple: #6b5aa8;
   --coral: #b55d4e;
   --teal: #2f8a73;
@@ -32,6 +33,11 @@
 
 * {
   box-sizing: border-box;
+}
+
+.sidebar-column {
+  overflow: visible !important;
+  padding-left: 1rem;
 }
 
 html,
@@ -4321,11 +4327,10 @@ input {
   gap: 1rem;
   padding: clamp(1.5rem, 3.5vw, 2.1rem);
   border-radius: 24px;
-  border: 1px solid color-mix(in srgb, var(--color-amber, #b8860b) 45%, transparent);
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.65), transparent 48%),
-    var(--color-parchment, #f5efe2);
-  box-shadow: 0 24px 70px rgba(34, 24, 12, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(240, 234, 214, 0.15);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.2);
 }
 
 .matchmaking-screen__eyebrow {
@@ -4333,11 +4338,12 @@ input {
   letter-spacing: 0.18em;
   text-transform: uppercase;
   font-size: 0.78rem;
-  color: var(--color-ink-muted, rgba(69, 52, 26, 0.7));
+  color: rgba(240, 234, 214, 0.5);
 }
 
 .matchmaking-screen__card h1 {
   margin: 0;
+  color: var(--parchment-100);
 }
 
 .matchmaking-screen__pulse {
@@ -4347,7 +4353,7 @@ input {
 
 .matchmaking-screen__subtext {
   margin: 0;
-  color: var(--color-ink-muted, rgba(69, 52, 26, 0.74));
+  color: rgba(240, 234, 214, 0.65);
   font-size: 1rem;
 }
 
@@ -4356,7 +4362,7 @@ input {
   font-size: clamp(2rem, 5vw, 2.75rem);
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: var(--color-ink-base, #2d2214);
+  color: var(--parchment-100);
 }
 
 .matchmaking-screen__notice {
