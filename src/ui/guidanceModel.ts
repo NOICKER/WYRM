@@ -276,7 +276,6 @@ function getSuggestedMoveTarget(moveTargets: StepOption[]): GuidanceTargetRef | 
 export function getCurrentPlayerGuidance({
   phase,
   tileDraft,
-  _interactionState,
   selectedWyrmId,
   selectedWyrmLabel,
   deployWyrmId,
