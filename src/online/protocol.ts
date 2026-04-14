@@ -12,7 +12,6 @@ import type {
 export interface OnlineProfile {
   username: string;
   level: number;
-  isGuest?: boolean;
 }
 
 export interface HelloMessage {

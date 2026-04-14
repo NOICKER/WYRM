@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: wyrm-server
+    runtime: node
+    buildCommand: npm install
+    startCommand: node --experimental-strip-types server/index.ts
+    envVars:
+      - key: NODE_ENV
+        value: production

@@ -127,7 +127,7 @@ export const TILE_LABELS: Record<RuneTileType, string> = {
   shadow: "Eclipse",
   light: "Radiance",
   void: "Erasure",
-  serpent: "Coil",
+  serpent: "Serpent",
 };
 
 export const TILE_HELP: Record<RuneTileType, string> = {

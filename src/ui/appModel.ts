@@ -3,7 +3,6 @@ import { PLAYER_ORDER_BY_COUNT, PLAYER_NAMES, TILE_HELP, TILE_LABELS } from "../
 
 export type AppRoute =
   | { name: "landing" }
-  | { name: "auth" }
   | { name: "lobby" }
   | { name: "settings" }
   | { name: "matchmaking" }
@@ -16,7 +15,6 @@ export type AppRoute =
 
 export interface ProtectionState {
   authenticated: boolean;
-  isGuestSession: boolean;
   hasActiveMatch: boolean;
   hasCompletedMatch: boolean;
 }
@@ -26,27 +24,36 @@ export interface RoomSeatStatus {
   ready: boolean;
 }
 
-export interface AuthFormState {
-  username: string;
-  password: string;
-}
-
 export interface UserProfile {
   username: string;
   level: number;
-  isGuest?: boolean;
+  clientId: string;
 }
 
-export function createGuestProfile(): UserProfile {
-  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  let randomSuffix = "";
-  for (let i = 0; i < 4; i++) {
-    randomSuffix += characters.charAt(Math.floor(Math.random() * characters.length));
+export function getOrCreateAutoProfile(): UserProfile {
+  let localStorage = (globalThis as any).localStorage;
+  let username = localStorage?.getItem("wyrm_username");
+  let clientId = localStorage?.getItem("wyrm_client_id");
+
+  if (!username) {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let randomSuffix = "";
+    for (let i = 0; i < 4; i++) {
+        randomSuffix += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    username = "Wyrm-" + randomSuffix;
+    localStorage?.setItem("wyrm_username", username);
   }
+
+  if (!clientId) {
+    clientId = (globalThis as any).crypto?.randomUUID() ?? `wyrm-fallback-${Date.now()}`;
+    localStorage?.setItem("wyrm_client_id", clientId);
+  }
+  
   return {
-    username: "Guest_" + randomSuffix,
+    username,
     level: 1,
-    isGuest: true,
+    clientId,
   };
 }
 
@@ -162,10 +169,6 @@ export function parseAppRoute(pathname: string): AppRoute {
     return { name: "landing" };
   }
 
-  if (segments[0] === "auth") {
-    return { name: "auth" };
-  }
-
   if (segments[0] === "lobby") {
     return { name: "lobby" };
   }
@@ -210,8 +213,6 @@ export function toPath(route: AppRoute): string {
   switch (route.name) {
     case "landing":
       return "/";
-    case "auth":
-      return "/auth";
     case "lobby":
       return "/lobby";
     case "settings":
@@ -234,16 +235,8 @@ export function toPath(route: AppRoute): string {
 }
 
 export function getProtectedRedirect(route: AppRoute, protection: ProtectionState): string | null {
-  if (!protection.authenticated && route.name !== "landing" && route.name !== "auth") {
+  if (!protection.authenticated && route.name !== "landing") {
     return "/";
-  }
-
-  if (protection.authenticated && route.name === "landing") {
-    return "/lobby";
-  }
-
-  if (protection.authenticated && !protection.isGuestSession && route.name === "auth") {
-    return "/lobby";
   }
 
   if ((route.name === "results" || route.name === "chronicle") && !protection.hasCompletedMatch) {

@@ -102,6 +102,10 @@ export function LobbyScreen({
           />
         </nav>
 
+        <div className="sidebar-lore">
+          <p>Serpents. Trails.<br/>Ancient runes.</p>
+        </div>
+
         <div className="sidebar-profile">
           <span>{profile.username}</span>
         </div>
@@ -113,7 +117,7 @@ export function LobbyScreen({
         </header>
 
         <div className="lobby-actions">
-          <button type="button" className="lobby-cta lobby-cta--create" onClick={onCreateAssembly} disabled={Boolean(pendingAction)}>
+          <button type="button" className="lobby-cta lobby-cta--create lobby-cta--primary" onClick={onCreateAssembly} disabled={Boolean(pendingAction)}>
             <span className="lobby-cta__icon">+</span>
             <div>
               <strong>Create an online game</strong>
@@ -122,8 +126,8 @@ export function LobbyScreen({
             {pendingAction === "create-room" ? <LoadingPulse label="Forging" /> : null}
           </button>
 
-          <button type="button" className="lobby-cta lobby-cta--create" onClick={() => onNavigate("/local")} disabled={Boolean(pendingAction)} style={{ backgroundColor: "var(--color-parchment-soft, #fdfbfa)", color: "var(--color-ink-base)" }}>
-            <span className="lobby-cta__icon" style={{ borderColor: "var(--color-ink-base)", color: "var(--color-ink-base)" }}>🤝</span>
+          <button type="button" className="lobby-cta lobby-cta--create" onClick={() => onNavigate("/local")} disabled={Boolean(pendingAction)}>
+            <span className="lobby-cta__icon">🤝</span>
             <div>
               <strong>Pass and Play</strong>
               <p>Start a local game on this device</p>
@@ -167,7 +171,7 @@ export function LobbyScreen({
           </div>
 
           {recentChronicles.length === 0 ? (
-            <p style={{ color: "var(--color-ink-muted, #888)", fontSize: "0.875rem" }}>
+            <p style={{ color: "rgba(240, 234, 214, 0.45)", fontSize: "0.875rem" }}>
               No games played yet. Create a room to start your first match.
             </p>
           ) : (

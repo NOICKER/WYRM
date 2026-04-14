@@ -3,9 +3,27 @@ import { Wordmark } from "../components/Wordmark.tsx";
 
 interface LandingScreenProps {
   onNavigate: (href: string) => void;
+  onEnter: (name: string, clientId: string) => void;
 }
 
-export function LandingScreen({ onNavigate }: LandingScreenProps): React.JSX.Element {
+export function LandingScreen({ onNavigate, onEnter }: LandingScreenProps): React.JSX.Element {
+  const [name, setName] = React.useState(() => window.localStorage.getItem("wyrm_username") ?? "");
+
+  const handlePlay = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    window.localStorage.setItem("wyrm_username", trimmed);
+    let clientId = window.localStorage.getItem("wyrm_client_id");
+    if (!clientId) {
+      clientId = crypto.randomUUID();
+      window.localStorage.setItem("wyrm_client_id", clientId);
+    }
+    
+    onEnter(trimmed, clientId);
+    onNavigate("/lobby");
+  };
   return (
     <main className="landing-screen">
       <section className="landing-hero">
@@ -15,22 +33,22 @@ export function LandingScreen({ onNavigate }: LandingScreenProps): React.JSX.Ele
         <p className="landing-hero__description">
           A 2–4 player strategy board game of serpents, trails, and ancient runes.
         </p>
-        <div className="landing-hero__actions">
+        <form className="landing-hero__actions" onSubmit={handlePlay} style={{ flexDirection: "column", alignItems: "stretch" }}>
+          <input 
+            type="text" 
+            placeholder="Enter your name" 
+            value={name} 
+            onChange={(e) => setName(e.target.value)} 
+            style={{ width: "100%", padding: "0.75rem", fontSize: "1rem", borderRadius: "8px", border: "1px solid var(--border)", background: "rgba(255,255,255,0.05)", color: "var(--text)" }} 
+          />
           <button
-            type="button"
+            type="submit"
             className="button button--forest"
-            onClick={() => onNavigate("/auth")}
+            disabled={!name.trim()}
           >
-            Sign in
+            Play WYRM
           </button>
-          <button
-            type="button"
-            className="button button--outline"
-            onClick={() => onNavigate("/auth?guest=true")}
-          >
-            Play as guest
-          </button>
-        </div>
+        </form>
         <div className="landing-hero__preview">
           <svg viewBox="0 0 160 160" width="160" height="160" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" className="landing-hero__board-glyph">
             <rect width="160" height="160" rx="18" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.1)" strokeWidth="1"/>
@@ -91,9 +109,6 @@ export function LandingScreen({ onNavigate }: LandingScreenProps): React.JSX.Ele
       </section>
 
       <footer className="landing-footer">
-        <button type="button" className="text-link" onClick={() => onNavigate("/auth")}>
-          Already have an account? Sign in
-        </button>
         <Wordmark href="/" compact onNavigate={onNavigate} />
       </footer>
     </main>

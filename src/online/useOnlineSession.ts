@@ -97,7 +97,6 @@ export function useOnlineSession(profile: UserProfile | null): OnlineSession {
         ? {
             username: profile.username,
             level: profile.level,
-            isGuest: profile.isGuest,
           }
         : null,
     [profile],

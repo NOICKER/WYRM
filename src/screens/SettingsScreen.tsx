@@ -148,49 +148,38 @@ export function SettingsScreen({
               <h2>Account</h2>
             </div>
 
-            {profile.isGuest ? (
-              <p style={{ margin: 0, color: "var(--ink-700)", lineHeight: 1.6 }}>
-                Create an account to save settings and match history.{" "}
-                <button type="button" className="text-link" onClick={() => onNavigate("/auth")}>
-                  Sign in or create one
-                </button>
-              </p>
-            ) : (
-              <>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(0, 1fr) auto",
-                    gap: "0.75rem",
-                    alignItems: "end",
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) auto",
+                gap: "0.75rem",
+                alignItems: "end",
+              }}
+            >
+              <label className="field">
+                <span>Display name</span>
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(event) => {
+                    setDisplayName(event.target.value);
+                    setDisplayNameSaved(false);
                   }}
-                >
-                  <label className="field">
-                    <span>Display name</span>
-                    <input
-                      type="text"
-                      value={displayName}
-                      onChange={(event) => {
-                        setDisplayName(event.target.value);
-                        setDisplayNameSaved(false);
-                      }}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="button button--forest"
-                    disabled={!canSaveDisplayName}
-                    onClick={handleSaveDisplayName}
-                  >
-                    Save
-                  </button>
-                </div>
+                />
+              </label>
+              <button
+                type="button"
+                className="button button--forest"
+                disabled={!canSaveDisplayName}
+                onClick={handleSaveDisplayName}
+              >
+                Save
+              </button>
+            </div>
 
-                {displayNameSaved ? (
-                  <p style={{ margin: 0, color: "var(--success)", fontWeight: 700 }}>Display name saved</p>
-                ) : null}
-              </>
-            )}
+            {displayNameSaved ? (
+              <p style={{ margin: 0, color: "var(--success)", fontWeight: 700 }}>Display name saved</p>
+            ) : null}
           </section>
 
           <hr className="settings-divider" />
@@ -225,7 +214,7 @@ export function SettingsScreen({
             </div>
 
             {matchHistory.length === 0 ? (
-              <p style={{ margin: 0, color: "var(--ink-700)", lineHeight: 1.6 }}>
+              <p style={{ margin: 0, color: "rgba(240, 234, 214, 0.45)", lineHeight: 1.6 }}>
                 No completed matches yet. Finish a game to see the full chronicle here.
               </p>
             ) : (

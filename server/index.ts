@@ -102,7 +102,10 @@ const queue = new MatchmakingQueue({
 });
 
 const httpServer = createServer((_, response) => {
-  response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+  response.writeHead(200, {
+    "content-type": "text/plain; charset=utf-8",
+    "access-control-allow-origin": "*",
+  });
   response.end("WYRM matchmaking server is running.\n");
 });
 

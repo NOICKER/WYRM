@@ -5,7 +5,6 @@ import { RouteCrossfade } from "./components/RouteCrossfade.tsx";
 import { PlayerGuide } from "./components/PlayerGuide.tsx";
 import { ChronicleScreen } from "./screens/ChronicleScreen.tsx";
 import { LandingScreen } from "./screens/LandingScreen.tsx";
-import { AuthScreen } from "./screens/AuthScreen.tsx";
 import { LobbyScreen } from "./screens/LobbyScreen.tsx";
 import { AssemblyLobbyScreen } from "./screens/AssemblyLobbyScreen.tsx";
 import { LocalSetupScreen } from "./screens/LocalSetupScreen.tsx";
@@ -25,7 +24,6 @@ import type { BotDifficulty } from "./state/botEngine.ts";
 import "./index.css";
 import { useOnlineSession } from "./online/useOnlineSession.ts";
 import {
-  AUTH_QUOTES,
   LOBBY_QUOTES,
   buildChronicleEvent,
   buildMatchRecord,
@@ -36,7 +34,7 @@ import {
   seedHostRoom,
   toPath,
   validateAssemblyCode,
-  createGuestProfile,
+  getOrCreateAutoProfile,
   type AppRoute,
   type AssemblyRoom,
   type MatchRecord,
@@ -88,7 +86,6 @@ function AppShell(): React.JSX.Element {
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [activeMatchSession, setActiveMatchSession] = useState<ActiveMatchSession | null>(null);
   const [sessionCounter, setSessionCounter] = useState(4);
-  const [guestBannerDismissed, setGuestBannerDismissed] = useState(false);
   const [reconnectBannerVisible, setReconnectBannerVisible] = useState(false);
   const [lobbyIntent, setLobbyIntent] = useState<LobbyIntent>(null);
   const [preferences, setPreferences] = useState(() => readInitialSettingsPreferences());
@@ -257,7 +254,9 @@ function AppShell(): React.JSX.Element {
   }, [clearActiveMatchContext, clearError, clearRouteError, navigate]);
 
   const handleSaveDisplayName = useCallback((nextUsername: string) => {
-    setProfile((current) => (current ? { ...current, username: nextUsername.trim() } : current));
+    const trimmed = nextUsername.trim();
+    window.localStorage.setItem("wyrm_username", trimmed);
+    setProfile((current) => (current ? { ...current, username: trimmed } : current));
   }, []);
 
   const handleTogglePreference = useCallback(
@@ -301,6 +300,11 @@ function AppShell(): React.JSX.Element {
     const handlePopState = () => setRoute(parseAppRoute(window.location.pathname));
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const autoProfile = getOrCreateAutoProfile();
+    setProfile(autoProfile);
   }, []);
 
   useEffect(() => {
@@ -405,7 +409,6 @@ function AppShell(): React.JSX.Element {
       route.name === "results" || route.name === "chronicle" ? completedMatches[route.matchId] : null;
     const redirect = getProtectedRedirect(route, {
       authenticated: Boolean(profile),
-      isGuestSession: Boolean(profile?.isGuest),
       hasActiveMatch: route.name === "match" ? activeMatch?.id === route.matchId && !activeMatch.completed : Boolean(activeMatch && !activeMatch.completed),
       hasCompletedMatch: Boolean(routeRecord),
     });
@@ -503,20 +506,6 @@ function AppShell(): React.JSX.Element {
     };
   }, [activeRoom, beginMatch, pendingAction, profile]);
 
-  const handleAuth = (username: string) => {
-    setPendingAction("auth");
-    setError(null);
-    window.setTimeout(() => {
-      setProfile({
-        username: username.trim(),
-        level: 7,
-      });
-      setPendingAction(null);
-      navigate({ name: "lobby" }, true);
-    }, 320);
-  };
-
-  const authQuote = pickRotating(AUTH_QUOTES, quoteSeed);
   const lobbyQuote = pickRotating(LOBBY_QUOTES, quoteSeed + 1);
   const handleAbandonMatch = useCallback(() => {
     const roomId = activeMatch?.roomId ?? null;
@@ -563,27 +552,17 @@ function AppShell(): React.JSX.Element {
     route.name === "results" || route.name === "chronicle" ? completedMatches[route.matchId] : null;
 
   const page = (() => {
-    if (!profile || route.name === "landing" || route.name === "auth") {
-      if (route.name === "landing") {
-        return <LandingScreen onNavigate={navigatePath} />;
-      }
+    if (route.name === "landing") {
       return (
-        <AuthScreen
-          quote={authQuote}
-          pendingAction={pendingAction}
-          error={error}
-          onSubmit={(form) => handleAuth(form.username)}
-          onGuestPlay={() => {
-            setPendingAction("guest");
-            setError(null);
-            window.setTimeout(() => {
-              setProfile(createGuestProfile());
-              setPendingAction(null);
-              navigate({ name: "lobby" }, true);
-            }, 320);
-          }}
+        <LandingScreen
+          onNavigate={navigatePath}
+          onEnter={(name, clientId) => setProfile({ username: name, level: profile?.level ?? 1, clientId })}
         />
       );
+    }
+
+    if (!profile) {
+      return null;
     }
 
     if (route.name === "lobby") {
@@ -804,8 +783,8 @@ function AppShell(): React.JSX.Element {
             onNavigate={navigatePath}
             onAbandonMatch={handleAbandonMatch}
             onOpenGuide={() => setGuideOpen(true)}
-            showGuestChip={Boolean(profile?.isGuest && !guestBannerDismissed)}
-            onDismissGuestChip={() => setGuestBannerDismissed(true)}
+            showGuestChip={false}
+            onDismissGuestChip={() => {}}
           />
         </OnlineGameProvider>
       );
@@ -820,8 +799,8 @@ function AppShell(): React.JSX.Element {
           onNavigate={navigatePath}
           onAbandonMatch={handleAbandonMatch}
           onOpenGuide={() => setGuideOpen(true)}
-          showGuestChip={Boolean(profile?.isGuest && !guestBannerDismissed)}
-          onDismissGuestChip={() => setGuestBannerDismissed(true)}
+          showGuestChip={false}
+          onDismissGuestChip={() => {}}
         />
       );
     }
@@ -889,7 +868,7 @@ function AppShell(): React.JSX.Element {
                 ...buildMatchRecord(
                   finalState,
                   localRoom,
-                  profile ?? createGuestProfile(),
+                  profile!,
                   sessionCounter,
                   [],
                 ),
@@ -899,8 +878,8 @@ function AppShell(): React.JSX.Element {
               setSessionCounter((current) => current + 1);
               navigate({ name: "results", matchId: record.id });
             }}
-            showGuestChip={Boolean(profile?.isGuest && !guestBannerDismissed)}
-            onDismissGuestChip={() => setGuestBannerDismissed(true)}
+            showGuestChip={false}
+            onDismissGuestChip={() => {}}
             localMode
             localPlayerNames={localPlayerConfig.playerNames}
             localPlayerBots={localPlayerConfig.playerBots}
@@ -973,9 +952,8 @@ function AppShell(): React.JSX.Element {
     );
   })();
 
-  const showGuestBanner = profile?.isGuest && !guestBannerDismissed && !["auth", "landing", "match", "local_match"].includes(route.name);
   const showReconnectBanner = reconnectBannerVisible && profile && route.name === "lobby";
-  const showStickyNotice = showGuestBanner || showReconnectBanner;
+  const showStickyNotice = showReconnectBanner;
   const connectionBannerVisible = connectionBannerStatus !== "connected";
 
   return (
@@ -995,9 +973,12 @@ function AppShell(): React.JSX.Element {
         aria-label="Go back"
         title="Go back"
       >
-        <svg fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+        <svg fill="none" stroke="currentColor" strokeWidth="2" 
+          strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"
+          width="16" height="16">
           <path d="M15 18l-6-6 6-6" />
         </svg>
+        <span>Back</span>
       </button>
       {showReconnectBanner ? (
         <div className="reconnect-banner">
@@ -1017,14 +998,7 @@ function AppShell(): React.JSX.Element {
           </button>
         </div>
       ) : null}
-      {showGuestBanner ? (
-        <div className="guest-banner">
-          <span>Playing as guest — match history will not be saved.</span>
-          <button type="button" onClick={() => setGuestBannerDismissed(true)} aria-label="Dismiss guest notice">
-            ✕
-          </button>
-        </div>
-      ) : null}
+
       <RouteCrossfade routeKey={toPath(route)}>{page}</RouteCrossfade>
       <PlayerGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
     </div>
