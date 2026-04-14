@@ -3006,6 +3006,15 @@ input {
   cursor: pointer;
 }
 
+.rune-card-shell--interactive:not([aria-disabled="true"]) .rune-card {
+  box-shadow: 0 0 0 1px rgba(184, 134, 11, 0.18);
+  transition: box-shadow 180ms ease, transform 180ms ease;
+}
+
+.rune-card-shell--interactive:not([aria-disabled="true"]):hover .rune-card {
+  box-shadow: 0 0 12px 2px rgba(184, 134, 11, 0.32), 0 0 0 1px rgba(184, 134, 11, 0.28);
+}
+
 .rune-card-shell--tray {
   width: 114px;
 }
@@ -3099,7 +3108,17 @@ input {
 }
 
 .rune-card--disabled {
-  opacity: 0.7;
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: saturate(0.4);
+}
+
+.rune-card-shell--interactive .rune-card--disabled {
+  opacity: 0.5;
+}
+
+.rune-card-shell[aria-disabled="true"] {
+  cursor: not-allowed;
 }
 
 .rune-card__art {
@@ -4593,5 +4612,93 @@ input {
   .match-board-cell {
     -webkit-tap-highlight-color: transparent;
   }
+}
+
+/* --- Interaction Guidance & Pulse Animations --- */
+
+@keyframes hintPulse {
+  0% { box-shadow: 0 0 0 0px rgba(184, 134, 11, 0); transform: scale(1); }
+  30% { box-shadow: 0 0 0 8px rgba(184, 134, 11, 0.4); transform: scale(1.02); }
+  100% { box-shadow: 0 0 0 16px rgba(184, 134, 11, 0); transform: scale(1); }
+}
+
+.hint-pulse {
+  animation: hintPulse 800ms ease-out forwards;
+}
+
+/* Specific Pulse Regions */
+.hint-pulse--board {
+  border-radius: 12px;
+}
+
+.hint-pulse--hand {
+  border-radius: 8px;
+}
+
+.hint-pulse--controls button {
+  animation: hintPulse 800ms ease-out forwards;
+}
+
+/* Target Highlighting */
+.target-highlight--cell {
+  position: relative;
+}
+
+.target-highlight--cell::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border: 2px solid var(--accent-amber);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: targetHighlightFade 1.5s ease-in-out infinite;
+}
+
+.target-highlight--wyrm {
+  filter: drop-shadow(0 0 4px var(--accent-amber));
+  animation: targetHighlightPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes targetHighlightFade {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+@keyframes targetHighlightPulse {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 2px var(--accent-amber)); }
+  50% { transform: scale(1.1); filter: drop-shadow(0 0 8px var(--accent-amber)); }
+}
+
+/* Next Action Bar (Guidance) */
+.match-board-guidance {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25rem;
+  background: rgba(184, 134, 11, 0.08); /* Faint amber background */
+  border-left: 3px solid var(--accent-amber);
+  transition: all 0.3s ease;
+}
+
+.match-board-guidance__hint {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--forest-850);
+}
+
+.match-board-guidance__sub {
+  font-size: 0.82rem;
+  color: var(--ink-700);
+  opacity: 0.8;
+}
+
+.match-board-guidance--error {
+  background: rgba(138, 57, 52, 0.08);
+  border-left-color: #8a3934;
+}
+
+.match-board-guidance--error .match-board-guidance__hint {
+  color: #8a3934;
 }
 

@@ -49,6 +49,10 @@ import {
   getVictoryOverlayCopy,
   shouldShowDeployOverlay,
 } from "../ui/matchInteractionModel.ts";
+import {
+  getCurrentPlayerGuidance,
+  type PlayerGuidance,
+} from "../ui/guidanceModel.ts";
 import { MATCH_MOTION_MS, getResponsiveMotionMode } from "../ui/matchMotion.ts";
 import { useMatchInteractions } from "../ui/useMatchInteractions.ts";
 import { getMatchBoardCellSize } from "./matchBoardSizing.ts";
@@ -118,6 +122,7 @@ interface MatchBoardGridProps {
   playerNames: Record<PlayerId, string>;
   disabled: boolean;
   movableWyrmIds: string[];
+  guidance?: PlayerGuidance;
   onCellClick: (coord: Coord) => void;
   onCellHover: (coord: Coord | null) => void;
 }
@@ -261,6 +266,7 @@ function MatchBoardGrid({
   playerNames,
   disabled,
   movableWyrmIds,
+  guidance,
   onCellClick,
   onCellHover,
 }: MatchBoardGridProps): React.JSX.Element {
@@ -343,6 +349,9 @@ function MatchBoardGrid({
                 selectedStart && selectedStart.row === cell.row && selectedStart.col === cell.col
                   ? "match-board-cell--selected-start"
                   : "",
+                guidance?.highlightHint === "cells" && (moveTarget || actionTarget)
+                  ? "target-highlight--cell"
+                  : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -387,6 +396,9 @@ function MatchBoardGrid({
                     && ghostEnd.row === coord.row
                     && ghostEnd.col === coord.col
                       ? "match-board-cell__token--arrival-pending"
+                      : "",
+                    guidance?.highlightHint === "wyrms" && (movableWyrmIds.includes(wyrm.id) || selectedWyrm)
+                      ? "target-highlight--wyrm"
                       : "",
                   ]
                     .filter(Boolean)
@@ -446,7 +458,6 @@ export function MatchScreen({
     trailWyrmId,
     discardSelection,
     peekPlayerId,
-    instruction,
     legalMoveTargets,
     moveTargets,
     actionTargets,
@@ -519,7 +530,27 @@ export function MatchScreen({
   const [freshTrailKeys, setFreshTrailKeys] = useState<string[]>([]);
   const [ghostMove, setGhostMove] = useState<GhostMoveState | null>(null);
   const [hoveredBoardCoord, setHoveredBoardCoord] = useState<Coord | null>(null);
+  const [activePulseRegion, setActivePulseRegion] = useState<string | null>(null);
   const errorToastTimerRef = useRef<number | null>(null);
+
+  const guidance = useMemo(
+    () =>
+      getCurrentPlayerGuidance(state, {
+        tileDraft,
+        hasSelectedMove: !!selectedWyrmId && interactionState === "wyrm_selected",
+        isMoving: interactionState === "moving",
+        isTileDraftReady: !!tileDraft && canConfirmTileDraft,
+      }),
+    [state, tileDraft, selectedWyrmId, interactionState, canConfirmTileDraft],
+  );
+
+  useEffect(() => {
+    if (interactionError && interactionError.highlightHint) {
+      setActivePulseRegion(interactionError.highlightHint);
+      const timer = window.setTimeout(() => setActivePulseRegion(null), 810);
+      return () => window.clearTimeout(timer);
+    }
+  }, [interactionError]);
 
   const clearDrawFeedbackTimers = useCallback(() => {
     for (const timerId of drawFeedbackTimerIdsRef.current) {
@@ -1578,7 +1609,15 @@ export function MatchScreen({
 
             <div className="match-sidebar__section match-sidebar__section--grow">
               <span className="match-sidebar__label">My Hand</span>
-              <div ref={handCardsRef} className="match-hand-list">
+               <div
+                 ref={handCardsRef}
+                 className={[
+                   "match-hand-list",
+                   activePulseRegion === "hand" ? "hint-pulse hint-pulse--hand" : "",
+                 ]
+                   .filter(Boolean)
+                   .join(" ")}
+               >
                 {handListEntries.map((entry) => (
                   <div key={entry.key} className="match-hand-list__item">
                     <button
@@ -1621,11 +1660,18 @@ export function MatchScreen({
 
           <div className="match-main-column">
         <section className="match-body">
-          <div
-            className={isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage"}
-            ref={boardRef}
-            style={{ position: "relative", width: "100%", height: "100%", maxHeight: "100%" }}
-          >
+            <div
+              className={[
+                isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage",
+                activePulseRegion === "board" || activePulseRegion === "cells" || activePulseRegion === "wyrms"
+                  ? "hint-pulse hint-pulse--board"
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              ref={boardRef}
+              style={{ position: "relative", width: "100%", height: "100%", maxHeight: "100%" }}
+            >
             {/* Floating clear selection */}
             {!isPaused && phase !== "end" && hasClearableInteraction ? (
               <div className="board-clear-action">
@@ -1802,6 +1848,7 @@ export function MatchScreen({
                 playerNames={playerNames}
                 disabled={showVictoryOverlay || isPaused || (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null)}
                 movableWyrmIds={movableWyrmIds}
+                guidance={guidance}
                 onCellClick={handleBoardCellClick}
                 onCellHover={handleBoardCellHover}
               />
@@ -1837,8 +1884,16 @@ export function MatchScreen({
             ) : null}
           </div>
 
-          {!isPaused && instruction && phase !== "end" ? (
-            <div className="match-instruction-bar" aria-live="polite">
+          {!isPaused && phase !== "end" ? (
+            <div
+              className={[
+                "match-instruction-bar",
+                activePulseRegion === "controls" ? "hint-pulse" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              aria-live="polite"
+            >
               <span className="match-instruction-bar__icon" aria-hidden="true">&rarr;</span>
               <div className="match-instruction-bar__copy">
                 {hoveredMoveSummary ? (
@@ -1871,17 +1926,22 @@ export function MatchScreen({
                     ) : null}
                   </div>
                 ) : (
-                  <>
-                    <p className="match-board-guidance__instruction">
-                      {isAutoCoilState
-                        ? "No Wyrms can move — place a trail instead"
-                        : renderInstructionWithHighlight(instruction)}
+                  <div className={[
+                    "match-board-guidance",
+                    interactionError ? "match-board-guidance--error" : ""
+                  ].join(" ")}>
+                    <p className="match-board-guidance__hint">
+                      {interactionError
+                        ? interactionError.message
+                        : isAutoCoilState
+                          ? "No Wyrms can move — place a trail instead"
+                          : renderInstructionWithHighlight(guidance.message)}
                     </p>
-                    {instructionMeta ? (
-                      <p className="match-board-guidance__meta">
-                        {instructionMeta}
-                      </p>
-                    ) : null}
+                    <p className="match-board-guidance__sub">
+                      {interactionError
+                        ? "[Action blocked]"
+                        : guidance.subMessage || (instructionMeta ? instructionMeta : "")}
+                    </p>
                     {selectedMove ? (
                       <div className="match-board-guidance__steps">
                         <span className="match-board-guidance__badge">Steps Remaining</span>
@@ -1890,7 +1950,7 @@ export function MatchScreen({
                         </span>
                       </div>
                     ) : null}
-                  </>
+                  </div>
                 )}
               </div>
               <div className="match-instruction-bar__actions">
@@ -2144,6 +2204,19 @@ export function MatchScreen({
                 (!isPaused && Boolean(tileDraft && "tile" in tileDraft && tileDraft.tile === tile)) ||
                 (!isPaused && Boolean(selectedMove && selectedMove.moveMode === "tempest" && index === 0));
 
+              const trayCardPlayable = handCardInteractionMode !== "disabled";
+              const trayCardReason =
+                isPaused ? "Game is paused"
+                : phase === "end" ? "Game is over"
+                : state.turnEffects.tileActionUsed ? "Already played a tile this turn"
+                : phase === "draw" ? "Draw a tile before playing runes"
+                : phase === "roll" ? "Roll the dice before playing runes"
+                : phase === "move" && !canPlayTiles ? "Move a Wyrm before playing tiles"
+                : tileDraft != null ? "Finish or cancel your current tile preview"
+                : selectedMove != null ? "Complete or cancel your movement path"
+                : deployWyrmId != null ? "Place the hoarded Wyrm or cancel"
+                : undefined;
+
               return (
                 <div
                   key={`${tile}-${index}`}
@@ -2158,6 +2231,8 @@ export function MatchScreen({
                     elevated={index === lairFocusIndex && Boolean(lairTile)}
                     lairReady={lairTile === tile && copies >= 3}
                     disabled={handCardInteractionMode === "disabled"}
+                    playable={trayCardPlayable}
+                    unplayableReason={trayCardReason}
                     onActivate={
                       handCardInteractionMode === "discard"
                         ? () => toggleDiscard(index)
