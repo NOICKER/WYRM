@@ -45,10 +45,10 @@ export type GuidanceTargetRef =
   | { kind: "player_choice"; playerId: PlayerId }
   | { kind: "control"; control: GuidanceControlId };
 
-export interface GuidanceTarget extends GuidanceTargetRef {
+export type GuidanceTarget = GuidanceTargetRef & {
   key: string;
   region: HighlightHint;
-}
+};
 
 export interface PlayerGuidance {
   type: GuidanceType;
@@ -276,7 +276,7 @@ function getSuggestedMoveTarget(moveTargets: StepOption[]): GuidanceTargetRef | 
 export function getCurrentPlayerGuidance({
   phase,
   tileDraft,
-  interactionState,
+  _interactionState,
   selectedWyrmId,
   selectedWyrmLabel,
   deployWyrmId,

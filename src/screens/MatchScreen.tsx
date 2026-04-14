@@ -1351,6 +1351,7 @@ export function MatchScreen({
 
   const handleBoardCellClick = useCallback(
     (coord: Coord) => {
+      markGuidanceActivity();
       if (motionMode.skip) {
         flushBoardMotion();
       }
@@ -1360,7 +1361,7 @@ export function MatchScreen({
         animateMoveCommit(result);
       }
     },
-    [animateMoveCommit, flushBoardMotion, handleBoardClick, motionMode.skip],
+    [animateMoveCommit, flushBoardMotion, handleBoardClick, markGuidanceActivity, motionMode.skip],
   );
 
   const handleBoardCellHover = useCallback((coord: Coord | null) => {
@@ -1656,6 +1657,9 @@ export function MatchScreen({
 
             <div className="match-sidebar__section match-sidebar__section--grow">
               <span className="match-sidebar__label">My Hand</span>
+              {tileDraft && tileSelectionSuggestion ? (
+                <div className="legacy-tray__suggestion">{tileSelectionSuggestion}</div>
+              ) : null}
                <div
                  ref={handCardsRef}
                  className={[

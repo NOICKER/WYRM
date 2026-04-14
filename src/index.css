@@ -4702,3 +4702,9 @@ input {
   color: #8a3934;
 }
 
+.legacy-tray__suggestion {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  text-align: center;
+  padding: 4px 0;
+}
