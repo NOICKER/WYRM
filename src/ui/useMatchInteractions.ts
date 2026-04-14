@@ -21,7 +21,13 @@ import {
   type Phase,
   type TileDraft,
 } from "./matchInteractionModel.ts";
-import type { ReasonCode } from "./guidanceModel.ts";
+import {
+  getCorrectiveGuidanceCopy,
+  getCurrentPlayerGuidance,
+  type HighlightHint,
+  type PlayerGuidance,
+  type ReasonCode,
+} from "./guidanceModel.ts";
 import {
   buildTilePlayRequestFromDraft,
   cancelMovementDraft,
@@ -51,11 +57,10 @@ interface BoardClickResultMoveCommit extends PendingMoveCommit {
 
 type BoardClickResult = BoardClickResultNone | BoardClickResultMoveCommit;
 
-export type HighlightHint = "board" | "hand" | "wyrms" | "cells" | "controls" | null;
-
 interface InteractionErrorState {
   id: number;
   message: string;
+  detail?: string;
   highlightHint: HighlightHint;
 }
 
@@ -105,6 +110,7 @@ export interface MatchInteractionsResult {
   discardSelection: number[];
   peekPlayerId: PlayerId | null;
   instruction: string;
+  guidance: PlayerGuidance;
   legalMoveTargets: Coord[];
   moveTargets: StepOption[];
   actionTargets: Coord[];
@@ -216,6 +222,24 @@ export function useMatchInteractions(): MatchInteractionsResult {
         ? "tempest"
         : manualPreferredMoveMode;
   const canDeployFromHoard = hasHoardDeployOpportunity(state, currentPlayer.hoard.length);
+  const hoardChoices = useMemo(
+    () =>
+      currentPlayer.hoard.map((wyrmId) => ({
+        wyrmId,
+        label: game.state.wyrms[wyrmId]?.label ?? wyrmId,
+      })),
+    [currentPlayer.hoard, game.state.wyrms],
+  );
+  const opponentChoices = useMemo(
+    () =>
+      state.players
+        .filter((player) => player.id !== currentPlayer.id)
+        .map((player) => ({
+          id: player.id,
+          label: PLAYER_NAMES[player.id],
+        })),
+    [currentPlayer.id, state.players],
+  );
 
   const selectedMoveDraft = phase === "move" ? rawSelectedMove : null;
   const tileDraft =
@@ -250,7 +274,12 @@ export function useMatchInteractions(): MatchInteractionsResult {
     setInteractionError(null);
   };
 
-  const raiseInteractionError = (message: string, highlightHint: HighlightHint = null, reason?: ReasonCode) => {
+  const raiseInteractionError = (
+    message: string,
+    highlightHint: HighlightHint = null,
+    reason?: ReasonCode,
+    detail?: string,
+  ) => {
     const now = Date.now();
     const key = reason || message;
     const lastTime = lastErrorTimeRef.current[key] || 0;
@@ -263,27 +292,9 @@ export function useMatchInteractions(): MatchInteractionsResult {
     setInteractionError({
       id: now + Math.floor(Math.random() * 1000),
       message,
+      detail,
       highlightHint,
     });
-  };
-
-  const getBlockingActionMessage = (): [string, HighlightHint] => {
-    if (rawTileDraft != null) {
-      return ["Finish or cancel your current tile preview.", "hand"];
-    }
-    if (rawSelectedMove != null && rawSelectedMove.interactionState === "moving") {
-      return ["Complete or cancel your movement path.", "board"];
-    }
-    if (rawSelectedMove != null) {
-      return ["A Wyrm is selected \u2014 choose a move or deselect it.", "board"];
-    }
-    if (rawDeployWyrmId != null) {
-      return ["Place the hoarded Wyrm or cancel the deploy.", "board"];
-    }
-    if (rawTrailWyrmId != null) {
-      return ["Place the extra trail marker first.", "board"];
-    }
-    return ["Complete your current action.", null];
   };
 
   const effectiveInteractionState: InteractionState =
@@ -469,22 +480,123 @@ export function useMatchInteractions(): MatchInteractionsResult {
   const canConfirmDiscard = phase === "discard" && discardSelection.length === state.mustDiscard;
   const canEndTurn = phase === "tile" && canEndTurnNow(state);
   const canConfirmTileDraft = isTileDraftReady(tileDraft);
+  const playableTileTypes = useMemo(() => {
+    if (!canPlayTiles) {
+      return [];
+    }
+
+    const availableTiles =
+      phase === "move"
+        ? currentPlayer.hand.filter((tile) => isPreMoveRune(tile))
+        : currentPlayer.hand;
+
+    return [...new Set(availableTiles)];
+  }, [canPlayTiles, currentPlayer.hand, phase]);
+  const blockedTrailWyrmIds = useMemo(
+    () =>
+      activeControlledWyrms
+        .filter(
+          (wyrm) =>
+            wyrm.position
+            && !hasAnyLegalMove(state, wyrm.id, "main")
+            && !hasAnyLegalMove(state, wyrm.id, "tempest")
+            && getAdjacentEmptyCells(state, wyrm.id, true).length > 0,
+        )
+        .map((wyrm) => wyrm.id),
+    [activeControlledWyrms, state],
+  );
+  const showCoilChoice = phase === "move" && state.dieResult === "coil" && state.turnEffects.coilChoice == null;
+  const showTargetSelection =
+    (tileDraft?.tile === "light" && !tileDraft.opponentId)
+    || (tileDraft?.tile === "void" && !tileDraft.opponentId);
+  const showSpecialWyrmChoice =
+    (tileDraft?.tile === "shadow" && tileDraft.mode === "lair" && !tileDraft.wyrmId)
+    || (tileDraft?.tile === "serpent" && tileDraft.mode === "lair" && !tileDraft.wyrmId);
+  const guidance = useMemo(
+    () =>
+      getCurrentPlayerGuidance({
+        phase,
+        tileDraft,
+        interactionState: effectiveInteractionState,
+        selectedWyrmId: selectedMoveDraft?.activeWyrmId ?? null,
+        selectedWyrmLabel: selectedMoveDraft ? state.wyrms[selectedMoveDraft.activeWyrmId]?.label ?? null : null,
+        deployWyrmId,
+        deployWyrmLabel: deployWyrmId ? state.wyrms[deployWyrmId]?.label ?? null : null,
+        trailWyrmId,
+        trailWyrmLabel: trailWyrmId ? state.wyrms[trailWyrmId]?.label ?? null : null,
+        moveTargets,
+        actionTargets,
+        movableWyrmIds,
+        blockedTrailWyrmIds,
+        discardSelection,
+        discardableIndices: currentPlayer.hand.map((_, index) => index),
+        playableTileTypes,
+        hoardSelectableWyrmIds: hoardChoices.map((choice) => choice.wyrmId),
+        opponentChoiceIds: opponentChoices.map((choice) => choice.id),
+        canConfirmMove,
+        canConfirmDiscard,
+        canConfirmTileDraft,
+        canEndTurn,
+        canPlayTiles,
+        showCoilChoice,
+        showTargetSelection,
+        showSpecialWyrmChoice,
+        stepsRemaining,
+        mustDiscard: state.mustDiscard,
+        isAutoCoilState,
+      }),
+    [
+      actionTargets,
+      canConfirmDiscard,
+      canConfirmMove,
+      canConfirmTileDraft,
+      canEndTurn,
+      canPlayTiles,
+      currentPlayer.hand,
+      deployWyrmId,
+      discardSelection,
+      effectiveInteractionState,
+      hoardChoices,
+      isAutoCoilState,
+      movableWyrmIds,
+      moveTargets,
+      opponentChoices,
+      phase,
+      playableTileTypes,
+      selectedMoveDraft,
+      showCoilChoice,
+      showSpecialWyrmChoice,
+      showTargetSelection,
+      state,
+      stepsRemaining,
+      tileDraft,
+      trailWyrmId,
+      blockedTrailWyrmIds,
+    ],
+  );
+  const raiseGuidedError = (
+    reason: ReasonCode,
+    override?: Partial<Pick<PlayerGuidance, "message" | "subMessage" | "highlightHint">>,
+  ) => {
+    const corrective = getCorrectiveGuidanceCopy(guidance);
+    raiseInteractionError(
+      override?.message ?? corrective.message,
+      override?.highlightHint ?? corrective.highlightHint,
+      reason,
+      override?.subMessage ?? corrective.subMessage,
+    );
+  };
 
   const startTileDraft = (tile: RuneTileType, mode: "single" | "lair") => {
     if (state.turnEffects.tileActionUsed) {
-      raiseInteractionError("Action blocked \u2014 you can only play one tile per turn.", null, "TILE_ALREADY_PLAYED");
+      raiseGuidedError("TILE_ALREADY_PLAYED");
       return;
     }
 
     const inTileStep = phase === "tile" && !(mode === "single" && isPreMoveRune(tile));
     const inPreMoveStep = preMoveTileWindow && mode === "single" && isPreMoveRune(tile);
     if (!inTileStep && !inPreMoveStep) {
-      const phaseMsg = phase === "draw" ? "Draw a tile before playing runes."
-        : phase === "roll" ? "Roll the dice before playing runes."
-        : phase === "move" && !state.turnEffects.mainMoveCompleted ? "Move a Wyrm before playing tiles."
-        : phase === "discard" ? "Finish discarding first."
-        : "Tiles can only be played during the Tile or pre-Move step.";
-      raiseInteractionError(`Wrong phase \u2014 ${phaseMsg}`, phase === "move" ? "board" : "controls", "WRONG_PHASE");
+      raiseGuidedError("WRONG_PHASE");
       return;
     }
 
@@ -538,7 +650,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
 
   const toggleDiscard = (index: number) => {
     if (phase !== "discard") {
-      raiseInteractionError("Wrong phase \u2014 discarding is only available during the discard step.", "controls", "WRONG_PHASE");
+      raiseGuidedError("WRONG_PHASE");
       return;
     }
 
@@ -553,8 +665,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
 
   const confirmDiscard = () => {
     if (phase !== "discard" || discardSelection.length !== state.mustDiscard) {
-      const msg = phase !== "discard" ? "Not in the discard step." : `Select exactly ${state.mustDiscard} tile${state.mustDiscard === 1 ? "" : "s"} to discard.`;
-      raiseInteractionError(`Invalid discard \u2014 ${msg}`, "hand", "DISCARD_REQUIRED");
+      raiseGuidedError("DISCARD_REQUIRED");
       return;
     }
 
@@ -573,8 +684,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
 
   const confirmMove = () => {
     if (!selectedMoveDraft || !canConfirmMove) {
-      const msg = !selectedMoveDraft ? "Select a Wyrm first." : "Complete the movement path before confirming.";
-      raiseInteractionError(`Move not ready \u2014 ${msg}`, "board", !selectedMoveDraft ? "TILE_REQUIRES_SELECTION" : "MOVE_NOT_COMPLETED");
+      raiseGuidedError(!selectedMoveDraft ? "TILE_REQUIRES_SELECTION" : "MOVE_NOT_COMPLETED");
       return;
     }
 
@@ -587,7 +697,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
 
   const chooseOpponent = (opponentId: PlayerId) => {
     if (!tileDraft) {
-      raiseInteractionError("No tile active \u2014 select a tile to play first.", "hand", "TILE_REQUIRES_SELECTION");
+      raiseGuidedError("TILE_REQUIRES_SELECTION");
       return;
     }
 
@@ -607,7 +717,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
 
   const chooseSpecialWyrm = (wyrmId: WyrmId) => {
     if (!tileDraft) {
-      raiseInteractionError("No tile active \u2014 select a tile to play first.", "hand", "TILE_REQUIRES_SELECTION");
+      raiseGuidedError("TILE_REQUIRES_SELECTION");
       return;
     }
 
@@ -624,7 +734,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
   const confirmTileDraft = () => {
     const request = buildTilePlayRequestFromDraft(tileDraft);
     if (!request || !tileDraft) {
-      raiseInteractionError("Target required \u2014 preview the effect on a valid target, then confirm it.", "board", "TILE_REQUIRES_TARGET");
+      raiseGuidedError("TILE_REQUIRES_TARGET");
       return false;
     }
 
@@ -642,12 +752,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
 
   const prepareDeploy = (wyrmId: WyrmId) => {
     if (!canDeployFromHoard || isInteractionLocked) {
-      if (isInteractionLocked) {
-        const [msg, hint] = getBlockingActionMessage();
-        raiseInteractionError(msg, hint);
-      } else {
-        raiseInteractionError("Action blocked \u2014 deploy is only available during the move step with an open Den cell.", "board", "ACTION_BLOCKED");
-      }
+      raiseGuidedError("ACTION_BLOCKED");
       return;
     }
     setRawSelectedMove(null);
@@ -661,7 +766,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
 
   const cancelMove = () => {
     if (!selectedMoveDraft) {
-      raiseInteractionError("Invalid action \u2014 no move in progress to cancel.", null, "ACTION_BLOCKED");
+      raiseGuidedError("ACTION_BLOCKED");
       return;
     }
     const cancelled = cancelMovementDraft(state, selectedMoveDraft);
@@ -771,7 +876,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
       if (handleTileBoardClick(coord)) {
         clearInteractionError();
       } else {
-        raiseInteractionError("Invalid target \u2014 choose one highlighted target or cancel the effect.", "board", "INVALID_TARGET");
+        raiseGuidedError("INVALID_TARGET");
       }
       return { kind: "none" };
     }
@@ -783,7 +888,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
         setInteractionState("idle");
         clearInteractionError();
       } else {
-        raiseInteractionError("Invalid target \u2014 choose a highlighted Den cell.", "cells", "INVALID_TARGET");
+        raiseGuidedError("INVALID_TARGET");
       }
       return { kind: "none" };
     }
@@ -795,7 +900,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
         setInteractionState("idle");
         clearInteractionError();
       } else {
-        raiseInteractionError("Invalid target \u2014 choose a highlighted adjacent cell.", "cells", "INVALID_TARGET");
+        raiseGuidedError("INVALID_TARGET");
       }
       return { kind: "none" };
     }
@@ -872,13 +977,15 @@ export function useMatchInteractions(): MatchInteractionsResult {
         [...selectedMoveDraft.currentPath, coord],
         selectedMoveDraft.moveMode,
       );
-      raiseInteractionError(`Invalid move \u2014 ${validation.reason ?? "Choose one highlighted adjacent cell."}`, "board", "INVALID_TARGET");
+      raiseGuidedError("INVALID_TARGET", {
+        subMessage: validation.reason ?? guidance.subMessage,
+      });
       return { kind: "none" };
     }
 
     if (!occupant || occupant.currentOwner !== currentPlayer.id || !occupant.position) {
       if (phase === "move") {
-        raiseInteractionError("Select one of your Wyrms to begin.");
+        raiseGuidedError("INVALID_TARGET");
       }
       return { kind: "none" };
     }
@@ -905,7 +1012,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
       }
 
       if (!hasAnyLegalMove(state, occupant.id, "main") && movableWyrmIds.length > 0) {
-        raiseInteractionError("Choose a Wyrm with a highlighted path.");
+        raiseGuidedError("INVALID_TARGET");
         return { kind: "none" };
       }
     }
@@ -1008,6 +1115,7 @@ export function useMatchInteractions(): MatchInteractionsResult {
     discardSelection,
     peekPlayerId,
     instruction,
+    guidance,
     legalMoveTargets,
     moveTargets,
     actionTargets,
@@ -1040,16 +1148,8 @@ export function useMatchInteractions(): MatchInteractionsResult {
     onSetPreferredMoveMode: setManualPreferredMoveMode,
     deployTargets,
     trailTargets,
-    hoardChoices: currentPlayer.hoard.map((wyrmId) => ({
-      wyrmId,
-      label: game.state.wyrms[wyrmId]?.label ?? wyrmId,
-    })),
-    opponentChoices: state.players
-      .filter((player) => player.id !== currentPlayer.id)
-      .map((player) => ({
-        id: player.id,
-        label: PLAYER_NAMES[player.id],
-      })),
+    hoardChoices,
+    opponentChoices,
     canDeployFromHoard,
     movableWyrmIds,
     isAutoCoilState,

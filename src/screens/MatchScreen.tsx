@@ -50,7 +50,8 @@ import {
   shouldShowDeployOverlay,
 } from "../ui/matchInteractionModel.ts";
 import {
-  getCurrentPlayerGuidance,
+  guidanceHasTarget,
+  guidanceSuggestsTarget,
   type PlayerGuidance,
 } from "../ui/guidanceModel.ts";
 import { MATCH_MOTION_MS, getResponsiveMotionMode } from "../ui/matchMotion.ts";
@@ -123,6 +124,7 @@ interface MatchBoardGridProps {
   disabled: boolean;
   movableWyrmIds: string[];
   guidance?: PlayerGuidance;
+  guidanceReinforced?: boolean;
   onCellClick: (coord: Coord) => void;
   onCellHover: (coord: Coord | null) => void;
 }
@@ -267,6 +269,7 @@ function MatchBoardGrid({
   disabled,
   movableWyrmIds,
   guidance,
+  guidanceReinforced = false,
   onCellClick,
   onCellHover,
 }: MatchBoardGridProps): React.JSX.Element {
@@ -318,6 +321,10 @@ function MatchBoardGrid({
           const canSelectMover =
             Boolean(wyrm && movableWyrmIds.includes(wyrm.id) && (!selectedWyrmId || interactionState === "wyrm_selected"));
           const clickable = !disabled && Boolean(moveTarget || actionTarget || canUndoStep || canSelectMover);
+          const guidedCell = guidanceHasTarget(guidance ?? null, { kind: "cell", coord });
+          const suggestedCell = guidanceSuggestsTarget(guidance ?? null, { kind: "cell", coord });
+          const guidedWyrm = Boolean(wyrm && guidanceHasTarget(guidance ?? null, { kind: "board_wyrm", wyrmId: wyrm.id }));
+          const suggestedWyrm = Boolean(wyrm && guidanceSuggestsTarget(guidance ?? null, { kind: "board_wyrm", wyrmId: wyrm.id }));
           const focusRelevant =
             moveTarget
             || actionTarget
@@ -349,9 +356,11 @@ function MatchBoardGrid({
                 selectedStart && selectedStart.row === cell.row && selectedStart.col === cell.col
                   ? "match-board-cell--selected-start"
                   : "",
-                guidance?.highlightHint === "cells" && (moveTarget || actionTarget)
+                guidedCell
                   ? "target-highlight--cell"
                   : "",
+                guidedCell && suggestedCell ? "target-highlight--suggested" : "",
+                guidedCell && guidanceReinforced ? "target-highlight--reinforced" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -397,9 +406,11 @@ function MatchBoardGrid({
                     && ghostEnd.col === coord.col
                       ? "match-board-cell__token--arrival-pending"
                       : "",
-                    guidance?.highlightHint === "wyrms" && (movableWyrmIds.includes(wyrm.id) || selectedWyrm)
+                    guidedWyrm
                       ? "target-highlight--wyrm"
                       : "",
+                    guidedWyrm && suggestedWyrm ? "target-highlight--suggested" : "",
+                    guidedWyrm && guidanceReinforced ? "target-highlight--reinforced" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
@@ -458,6 +469,7 @@ export function MatchScreen({
     trailWyrmId,
     discardSelection,
     peekPlayerId,
+    guidance,
     legalMoveTargets,
     moveTargets,
     actionTargets,
@@ -531,18 +543,10 @@ export function MatchScreen({
   const [ghostMove, setGhostMove] = useState<GhostMoveState | null>(null);
   const [hoveredBoardCoord, setHoveredBoardCoord] = useState<Coord | null>(null);
   const [activePulseRegion, setActivePulseRegion] = useState<string | null>(null);
+  const [guidanceReinforced, setGuidanceReinforced] = useState(false);
   const errorToastTimerRef = useRef<number | null>(null);
-
-  const guidance = useMemo(
-    () =>
-      getCurrentPlayerGuidance(state, {
-        tileDraft,
-        hasSelectedMove: !!selectedWyrmId && interactionState === "wyrm_selected",
-        isMoving: interactionState === "moving",
-        isTileDraftReady: !!tileDraft && canConfirmTileDraft,
-      }),
-    [state, tileDraft, selectedWyrmId, interactionState, canConfirmTileDraft],
-  );
+  const guidanceIdleTimerRef = useRef<number | null>(null);
+  const [guidanceActivityTick, setGuidanceActivityTick] = useState(0);
 
   useEffect(() => {
     if (interactionError && interactionError.highlightHint) {
@@ -551,6 +555,36 @@ export function MatchScreen({
       return () => window.clearTimeout(timer);
     }
   }, [interactionError]);
+
+  const markGuidanceActivity = useCallback(() => {
+    setGuidanceReinforced(false);
+    setGuidanceActivityTick((current) => current + 1);
+  }, []);
+
+  useEffect(() => {
+    if (guidanceIdleTimerRef.current != null) {
+      window.clearTimeout(guidanceIdleTimerRef.current);
+      guidanceIdleTimerRef.current = null;
+    }
+
+    setGuidanceReinforced(false);
+
+    if (!guidance.validTargets.length || interactionError) {
+      return;
+    }
+
+    guidanceIdleTimerRef.current = window.setTimeout(() => {
+      setGuidanceReinforced(true);
+      guidanceIdleTimerRef.current = null;
+    }, 2400);
+
+    return () => {
+      if (guidanceIdleTimerRef.current != null) {
+        window.clearTimeout(guidanceIdleTimerRef.current);
+        guidanceIdleTimerRef.current = null;
+      }
+    };
+  }, [guidance.signature, guidanceActivityTick, interactionError]);
 
   const clearDrawFeedbackTimers = useCallback(() => {
     for (const timerId of drawFeedbackTimerIdsRef.current) {
@@ -707,6 +741,8 @@ export function MatchScreen({
     || interactionState === "tile_preview"
     || deployWyrmId != null
     || trailWyrmId != null
+    || guidance.highlightHint === "cells"
+    || guidance.highlightHint === "wyrms"
       ? "active"
       : "idle";
   const hasPendingMotion = Boolean(rollingFace || drawFeedback || ghostMove || freshTrailKeys.length > 0);
@@ -977,8 +1013,14 @@ export function MatchScreen({
         tile,
         copies: 1,
         countLabel: `#${index + 1}`,
-        detail: discardSelection.includes(index) ? "Selected to discard" : "Tap to discard",
+        detail: guidanceSuggestsTarget(guidance, { kind: "discard_index", index })
+          ? "Next click"
+          : discardSelection.includes(index)
+            ? "Selected to discard"
+            : "Tap to discard",
         active: discardSelection.includes(index),
+        guided: guidanceHasTarget(guidance, { kind: "discard_index", index }),
+        suggested: guidanceSuggestsTarget(guidance, { kind: "discard_index", index }),
         onActivate: handCardInteractionMode === "discard" ? () => toggleDiscard(index) : undefined,
         onPlayLair: undefined as (() => void) | undefined,
       }));
@@ -1006,6 +1048,8 @@ export function MatchScreen({
               : "Tap to preview"
             : TILE_HELP[tile],
         active,
+        guided: guidanceHasTarget(guidance, { kind: "hand_tile", tile }),
+        suggested: guidanceSuggestsTarget(guidance, { kind: "hand_tile", tile }),
         onActivate: handCardInteractionMode === "play" ? () => startTileDraft(tile, "single") : undefined,
         onPlayLair:
           handCardInteractionMode === "play" && copies >= 3
@@ -1013,7 +1057,7 @@ export function MatchScreen({
             : undefined,
       }];
     });
-  }, [discardSelection, handCardInteractionMode, phase, startTileDraft, tileCounts, tileDraft, toggleDiscard, trayTiles]);
+  }, [discardSelection, guidance, handCardInteractionMode, phase, startTileDraft, tileCounts, tileDraft, toggleDiscard, trayTiles]);
 
   const localViewerPlayerId = useMemo<PlayerId | null>(() => {
     if (localMode) {
@@ -1591,6 +1635,9 @@ export function MatchScreen({
                           "match-hoard-list__token",
                           deployReady ? "match-hoard-list__token--ready" : "",
                           deployWyrmId === wyrmId ? "match-hoard-list__token--active" : "",
+                          guidanceHasTarget(guidance, { kind: "hoard_wyrm", wyrmId }) ? "guidance-target--guided match-hoard-list__token--guided" : "",
+                          guidanceSuggestsTarget(guidance, { kind: "hoard_wyrm", wyrmId }) ? "guidance-target--suggested" : "",
+                          guidanceReinforced && guidanceHasTarget(guidance, { kind: "hoard_wyrm", wyrmId }) ? "guidance-target--reinforced" : "",
                         ].filter(Boolean).join(" ")}
                         style={{ "--hoard-token-color": tokenColor } as React.CSSProperties}
                         onClick={() => prepareDeploy(wyrmId)}
@@ -1613,7 +1660,9 @@ export function MatchScreen({
                  ref={handCardsRef}
                  className={[
                    "match-hand-list",
-                   activePulseRegion === "hand" ? "hint-pulse hint-pulse--hand" : "",
+                   activePulseRegion === "hand" || (guidanceReinforced && guidance.highlightHint === "hand")
+                     ? "hint-pulse hint-pulse--hand"
+                     : "",
                  ]
                    .filter(Boolean)
                    .join(" ")}
@@ -1625,6 +1674,9 @@ export function MatchScreen({
                       className={[
                         "match-hand-list__button",
                         entry.active ? "match-hand-list__button--active" : "",
+                        entry.guided ? "guidance-target--guided match-hand-list__button--guided" : "",
+                        entry.suggested ? "guidance-target--suggested" : "",
+                        entry.guided && guidanceReinforced ? "guidance-target--reinforced" : "",
                       ].filter(Boolean).join(" ")}
                       onClick={entry.onActivate}
                       disabled={!entry.onActivate}
@@ -1646,7 +1698,12 @@ export function MatchScreen({
                     {entry.onPlayLair ? (
                       <button
                         type="button"
-                        className="button button--outline match-hand-list__lair"
+                        className={[
+                          "button button--outline match-hand-list__lair",
+                          entry.guided ? "guidance-target--guided" : "",
+                          entry.suggested ? "guidance-target--suggested" : "",
+                          entry.guided && guidanceReinforced ? "guidance-target--reinforced" : "",
+                        ].filter(Boolean).join(" ")}
                         onClick={entry.onPlayLair}
                       >
                         Lair x3
@@ -1664,6 +1721,7 @@ export function MatchScreen({
               className={[
                 isPaused ? "match-board-stage match-board-stage--paused" : "match-board-stage",
                 activePulseRegion === "board" || activePulseRegion === "cells" || activePulseRegion === "wyrms"
+                || (guidanceReinforced && (guidance.highlightHint === "board" || guidance.highlightHint === "cells" || guidance.highlightHint === "wyrms"))
                   ? "hint-pulse hint-pulse--board"
                   : "",
               ]
@@ -1739,11 +1797,30 @@ export function MatchScreen({
                       <h4 className="board-action-overlay__title">Coil â€” Choose Movement</h4>
                       <div ref={coilChoiceRef} className="board-action-overlay__grid">
                         {[1, 2, 3].map((choice) => (
-                          <button key={choice} type="button" className="button button--outline" onClick={() => onSetCoilChoice(choice as 1 | 2 | 3)}>
+                          <button
+                            key={choice}
+                            type="button"
+                            className={[
+                              "button button--outline",
+                              guidanceHasTarget(guidance, { kind: "control", control: `coil_${choice}` as "coil_1" | "coil_2" | "coil_3" }) ? "guidance-target--guided" : "",
+                              guidanceSuggestsTarget(guidance, { kind: "control", control: `coil_${choice}` as "coil_1" | "coil_2" | "coil_3" }) ? "guidance-target--suggested" : "",
+                              guidanceReinforced && guidanceHasTarget(guidance, { kind: "control", control: `coil_${choice}` as "coil_1" | "coil_2" | "coil_3" }) ? "guidance-target--reinforced" : "",
+                            ].filter(Boolean).join(" ")}
+                            onClick={() => onSetCoilChoice(choice as 1 | 2 | 3)}
+                          >
                             Move {choice}
                           </button>
                         ))}
-                        <button type="button" className="button button--forest" onClick={() => onSetCoilChoice("extra_trail")}>
+                        <button
+                          type="button"
+                          className={[
+                            "button button--forest",
+                            guidanceHasTarget(guidance, { kind: "control", control: "coil_extra_trail" }) ? "guidance-target--guided" : "",
+                            guidanceSuggestsTarget(guidance, { kind: "control", control: "coil_extra_trail" }) ? "guidance-target--suggested" : "",
+                            guidanceReinforced && guidanceHasTarget(guidance, { kind: "control", control: "coil_extra_trail" }) ? "guidance-target--reinforced" : "",
+                          ].filter(Boolean).join(" ")}
+                          onClick={() => onSetCoilChoice("extra_trail")}
+                        >
                           Place Trail
                         </button>
                       </div>
@@ -1756,7 +1833,17 @@ export function MatchScreen({
                       <h4 className="board-action-overlay__title">Choose Target</h4>
                       <div className="board-action-overlay__grid">
                         {opponentChoices.map((opponent) => (
-                          <button key={opponent.id} type="button" className="button button--outline" onClick={() => chooseOpponent(opponent.id)}>
+                          <button
+                            key={opponent.id}
+                            type="button"
+                            className={[
+                              "button button--outline",
+                              guidanceHasTarget(guidance, { kind: "player_choice", playerId: opponent.id }) ? "guidance-target--guided" : "",
+                              guidanceSuggestsTarget(guidance, { kind: "player_choice", playerId: opponent.id }) ? "guidance-target--suggested" : "",
+                              guidanceReinforced && guidanceHasTarget(guidance, { kind: "player_choice", playerId: opponent.id }) ? "guidance-target--reinforced" : "",
+                            ].filter(Boolean).join(" ")}
+                            onClick={() => chooseOpponent(opponent.id)}
+                          >
                             {opponent.label}
                           </button>
                         ))}
@@ -1770,7 +1857,17 @@ export function MatchScreen({
                       <h4 className="board-action-overlay__title">Select Wyrm</h4>
                       <div className="board-action-overlay__grid">
                         {hoardChoices.map((choice) => (
-                          <button key={choice.wyrmId} type="button" className="button button--outline" onClick={() => chooseSpecialWyrm(choice.wyrmId)}>
+                          <button
+                            key={choice.wyrmId}
+                            type="button"
+                            className={[
+                              "button button--outline",
+                              guidanceHasTarget(guidance, { kind: "hoard_wyrm", wyrmId: choice.wyrmId }) ? "guidance-target--guided" : "",
+                              guidanceSuggestsTarget(guidance, { kind: "hoard_wyrm", wyrmId: choice.wyrmId }) ? "guidance-target--suggested" : "",
+                              guidanceReinforced && guidanceHasTarget(guidance, { kind: "hoard_wyrm", wyrmId: choice.wyrmId }) ? "guidance-target--reinforced" : "",
+                            ].filter(Boolean).join(" ")}
+                            onClick={() => chooseSpecialWyrm(choice.wyrmId)}
+                          >
                             {choice.label}
                           </button>
                         ))}
@@ -1849,6 +1946,7 @@ export function MatchScreen({
                 disabled={showVictoryOverlay || isPaused || (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null)}
                 movableWyrmIds={movableWyrmIds}
                 guidance={guidance}
+                guidanceReinforced={guidanceReinforced}
                 onCellClick={handleBoardCellClick}
                 onCellHover={handleBoardCellHover}
               />
@@ -1916,15 +2014,6 @@ export function MatchScreen({
                       </p>
                     ) : null}
                   </div>
-                ) : tileSelectionPreview ? (
-                  <div className="tile-selection-preview">
-                    <span className="tile-selection-preview__eyebrow">Selected Rune Tile</span>
-                    <strong className="tile-selection-preview__title">{tileSelectionPreview.title}</strong>
-                    <p className="tile-selection-preview__detail">{tileSelectionPreview.detail}</p>
-                    {tileSelectionSuggestion ? (
-                      <p className="tile-selection-preview__suggestion">{tileSelectionSuggestion}</p>
-                    ) : null}
-                  </div>
                 ) : (
                   <div className={[
                     "match-board-guidance",
@@ -1977,7 +2066,12 @@ export function MatchScreen({
                   <>
                     <button
                       type="button"
-                      className="button button--forest"
+                      className={[
+                        "button button--forest",
+                        guidanceHasTarget(guidance, { kind: "control", control: "confirm_tile" }) ? "guidance-target--guided" : "",
+                        guidanceSuggestsTarget(guidance, { kind: "control", control: "confirm_tile" }) ? "guidance-target--suggested" : "",
+                        guidanceReinforced && guidanceHasTarget(guidance, { kind: "control", control: "confirm_tile" }) ? "guidance-target--reinforced" : "",
+                      ].filter(Boolean).join(" ")}
                       disabled={!canConfirmTileDraft}
                       onClick={confirmTileDraft}
                     >
@@ -1985,7 +2079,12 @@ export function MatchScreen({
                     </button>
                     <button
                       type="button"
-                      className="button button--outline"
+                      className={[
+                        "button button--outline",
+                        guidanceHasTarget(guidance, { kind: "control", control: "cancel_interaction" }) ? "guidance-target--guided" : "",
+                        guidanceSuggestsTarget(guidance, { kind: "control", control: "cancel_interaction" }) ? "guidance-target--suggested" : "",
+                        guidanceReinforced && guidanceHasTarget(guidance, { kind: "control", control: "cancel_interaction" }) ? "guidance-target--reinforced" : "",
+                      ].filter(Boolean).join(" ")}
                       onClick={clearInteraction}
                     >
                       Cancel Effect
@@ -1996,7 +2095,12 @@ export function MatchScreen({
                     {!isPaused && hasClearableInteraction ? (
                       <button
                         type="button"
-                        className="button button--ghost"
+                        className={[
+                          "button button--ghost",
+                          guidanceHasTarget(guidance, { kind: "control", control: "cancel_interaction" }) ? "guidance-target--guided" : "",
+                          guidanceSuggestsTarget(guidance, { kind: "control", control: "cancel_interaction" }) ? "guidance-target--suggested" : "",
+                          guidanceReinforced && guidanceHasTarget(guidance, { kind: "control", control: "cancel_interaction" }) ? "guidance-target--reinforced" : "",
+                        ].filter(Boolean).join(" ")}
                         onClick={() => {
                           setHoveredBoardCoord(null);
                           if (selectedMove) {
@@ -2012,7 +2116,12 @@ export function MatchScreen({
                     {!isPaused && primaryAction.visible ? (
                       <button
                         type="button"
-                        className="button button--forest"
+                        className={[
+                          "button button--forest",
+                          guidanceHasTarget(guidance, { kind: "control", control: "primary_action" }) ? "guidance-target--guided" : "",
+                          guidanceSuggestsTarget(guidance, { kind: "control", control: "primary_action" }) ? "guidance-target--suggested" : "",
+                          guidanceReinforced && guidanceHasTarget(guidance, { kind: "control", control: "primary_action" }) ? "guidance-target--reinforced" : "",
+                        ].filter(Boolean).join(" ")}
                         disabled={primaryAction.disabled}
                         onClick={handlePrimaryAction}
                       >
