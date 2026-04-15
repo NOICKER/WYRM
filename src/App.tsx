@@ -864,11 +864,15 @@ function AppShell(): React.JSX.Element {
             onAbandonMatch={() => navigate({ name: "lobby" })}
             onOpenGuide={() => setGuideOpen(true)}
             onMatchComplete={(finalState) => {
+              if (!profile) {
+                navigatePath("/", true);
+                return;
+              }
               const record: MatchRecord = {
                 ...buildMatchRecord(
                   finalState,
                   localRoom,
-                  profile!,
+                  profile,
                   sessionCounter,
                   [],
                 ),

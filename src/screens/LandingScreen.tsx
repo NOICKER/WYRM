@@ -49,7 +49,6 @@ export function LandingScreen({ onNavigate, onEnter }: LandingScreenProps): Reac
               color: "var(--parchment-100)",
             }} 
           />
-          <p style={{ color: 'var(--parchment-100)' }}>placeholder text should read "Your name"</p>
           <button
             type="submit"
             className="button button--forest"

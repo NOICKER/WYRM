@@ -701,7 +701,7 @@ export function MatchScreen({
   }, [state.winner, state, onMatchComplete]);
   const victoryOverlayCopy = getVictoryOverlayCopy(state, playerNames);
   const victoryAccentColor = state.winner ? getColorValue(playerColors[state.winner]) : currentPlayerColor;
-  const canRestartMatch = localMode || Boolean(onRestartMatch);
+  const canRestartMatch = !onMatchComplete && (localMode || Boolean(onRestartMatch));
   const instructionMeta = useMemo(
     () =>
       getMatchInstructionMeta({
