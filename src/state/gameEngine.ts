@@ -71,10 +71,6 @@ function getTrailDuration(wyrm: Wyrm): number {
   return wyrm.serpentBoostTurnsRemaining > 0 ? 5 : 3;
 }
 
-function isDenCell(state: GameState, coord: Coord): boolean {
-  return state.board[coord.row][coord.col].type.startsWith("den_");
-}
-
 function removeTrailsByPredicate(
   state: GameState,
   predicate: (trailOwner: PlayerId, sourceWyrmId: WyrmId) => boolean,
@@ -171,6 +167,11 @@ function maybePromoteWyrm(state: GameState, wyrm: Wyrm): void {
 
   const destination = state.board[wyrm.position.row][wyrm.position.col];
   if (!isOpponentDenCell(wyrm.currentOwner, destination.type)) {
+    return;
+  }
+
+  const denOwnerId = Number(destination.type.slice(-1)) as PlayerId;
+  if (!state.players.some((player) => player.id === denOwnerId)) {
     return;
   }
 
@@ -631,10 +632,8 @@ export function actionPlayTile(state: GameState, request: TilePlayRequest): Game
           || !second?.position
           || first.currentOwner !== player.id
           || second.currentOwner !== player.id
-          || isDenCell(next, first.position)
-          || isDenCell(next, second.position)
         ) {
-          return setError(next, "Eclipse can only swap your on-board wyrms outside every Den.");
+          return setError(next, "Eclipse needs two of your active wyrms on the board.");
         }
         commitCards();
         const firstPos = { ...first.position };

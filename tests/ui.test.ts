@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
+  PLAYER_PALETTE,
   buildMatchRecord,
   canHostCommence,
   getProtectedRedirect,
@@ -19,6 +22,9 @@ import {
   shouldShowDeployOverlay,
 } from "../src/ui/matchInteractionModel.ts";
 import type { GameState, PlayerId, WyrmId } from "../src/state/types.ts";
+
+const css = readFileSync(resolve("src/index.css"), "utf8");
+const matchScreen = readFileSync(resolve("src/screens/MatchScreen.tsx"), "utf8");
 
 function getPlayerWyrmIds(state: GameState, playerId: PlayerId): WyrmId[] {
   return Object.values(state.wyrms)
@@ -128,6 +134,53 @@ function clearBoardOccupants(state: GameState): void {
   assert.equal(validateAssemblyCode("ABC-7-2026"), true, "valid sigil codes should pass");
   assert.equal(validateAssemblyCode("abc-7-2026"), false, "lowercase sigil codes should fail");
   assert.equal(validateAssemblyCode("ABCD"), false, "incomplete sigil codes should fail");
+}
+
+{
+  assert.deepEqual(
+    PLAYER_PALETTE,
+    {
+      purple: { base: "#534AB7", soft: "rgba(83, 74, 183, 0.15)", ink: "#1e1a4a" },
+      coral: { base: "#D85A30", soft: "rgba(216, 90, 48, 0.16)", ink: "#4b1a0c" },
+      teal: { base: "#1D9E75", soft: "rgba(29, 158, 117, 0.16)", ink: "#0a3328" },
+      amber: { base: "#BA7517", soft: "rgba(186, 117, 23, 0.16)", ink: "#4c3000" },
+    },
+    "the player palette should match the GDD color system for all four player identities",
+  );
+}
+
+{
+  assert.match(
+    matchScreen,
+    /trailOpacity\s*=\s*trailRoundsRemaining >= 3 \? 1(?:\.0)? : trailRoundsRemaining === 2 \? 0\.55 : 0\.28;/,
+    "trail opacity should map fresh, fading, and old trails to the GDD's exact visibility levels",
+  );
+
+  assert.match(css, /--purple:\s*#534AB7;/, "the purple CSS token should match the approved player color");
+  assert.match(css, /--coral:\s*#D85A30;/, "the coral CSS token should match the approved player color");
+  assert.match(css, /--teal:\s*#1D9E75;/, "the teal CSS token should match the approved player color");
+  assert.match(css, /--amber-player:\s*#BA7517;/, "the amber CSS token should match the approved player color");
+
+  assert.match(
+    css,
+    /\.match-board-cell--den_p1\s*\{[\s\S]*background:\s*rgba\(216,\s*214,\s*248,\s*0\.45\);[\s\S]*box-shadow:\s*inset 0 0 0 1px rgba\(83,\s*74,\s*183,\s*0\.4\);/s,
+    "player one's Den cells should use the GDD fill and border colors",
+  );
+  assert.match(
+    css,
+    /\.match-board-cell--den_p2\s*\{[\s\S]*background:\s*rgba\(245,\s*196,\s*179,\s*0\.45\);[\s\S]*box-shadow:\s*inset 0 0 0 1px rgba\(216,\s*90,\s*48,\s*0\.4\);/s,
+    "player two's Den cells should use the GDD fill and border colors",
+  );
+  assert.match(
+    css,
+    /\.match-board-cell--den_p3\s*\{[\s\S]*background:\s*rgba\(159,\s*225,\s*203,\s*0\.45\);[\s\S]*box-shadow:\s*inset 0 0 0 1px rgba\(29,\s*158,\s*117,\s*0\.4\);/s,
+    "player three's Den cells should use the GDD fill and border colors",
+  );
+  assert.match(
+    css,
+    /\.match-board-cell--den_p4\s*\{[\s\S]*background:\s*rgba\(250,\s*199,\s*117,\s*0\.45\);[\s\S]*box-shadow:\s*inset 0 0 0 1px rgba\(186,\s*117,\s*23,\s*0\.4\);/s,
+    "player four's Den cells should use the GDD fill and border colors",
+  );
 }
 
 {

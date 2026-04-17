@@ -318,15 +318,21 @@ function primeTurnForForcedEnd(state: GameState): void {
   const [denWyrm, roamingWyrm] = getPlayerWyrmIds(state, 1);
   relocateWyrm(state, roamingWyrm, { row: 4, col: 4 });
 
-  const rejected = actionPlayTile(state, {
+  const swapped = actionPlayTile(state, {
     mode: "single",
     tile: "shadow",
     swapWyrmIds: [denWyrm, roamingWyrm],
   });
-  assert.equal(
-    rejected.error,
-    "Eclipse can only swap your on-board wyrms outside every Den.",
-    "eclipse should not allow swapping a wyrm that is still sitting inside a Den",
+  assert.equal(swapped.error, null, "eclipse should allow swapping two controlled wyrms that are on the board");
+  assert.deepEqual(
+    swapped.wyrms[denWyrm].position,
+    { row: 4, col: 4 },
+    "eclipse should let a wyrm swap out of its Den when both wyrms are already on the board",
+  );
+  assert.deepEqual(
+    swapped.wyrms[roamingWyrm].position,
+    { row: 0, col: 0 },
+    "eclipse should move the second selected wyrm into the first wyrm's original cell",
   );
 }
 
@@ -611,6 +617,31 @@ function primeTurnForForcedEnd(state: GameState): void {
     moved.wyrms[secondWyrm].isElder,
     false,
     "natural Den promotion should fail when that player already has an Elder in play",
+  );
+}
+
+{
+  const state = createInitialState(3);
+  clearBoardOccupants(state);
+  state.phase = "move";
+  state.dieResult = 1;
+
+  const [mover] = getPlayerWyrmIds(state, 1);
+  relocateWyrm(state, mover, { row: 9, col: 10 });
+
+  const moved = actionMove(state, mover, [
+    { row: 9, col: 10 },
+    { row: 10, col: 10 },
+  ]);
+  assert.equal(
+    moved.wyrms[mover].isElder,
+    false,
+    "three-player games should not grant Elder promotion for entering the unused player-four Den corner",
+  );
+  assert.equal(
+    moved.players[0].elderTokenAvailable,
+    true,
+    "the active player's Elder token should stay available when they enter an unused Den corner",
   );
 }
 

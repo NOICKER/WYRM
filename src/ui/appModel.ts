@@ -153,10 +153,10 @@ export const SCRIBE_NAMES = [
 ];
 
 export const PLAYER_PALETTE: Record<PlayerColor, { base: string; soft: string; ink: string }> = {
-  purple: { base: "#6b5aa8", soft: "rgba(107, 90, 168, 0.15)", ink: "#2b2046" },
-  coral: { base: "#b55d4e", soft: "rgba(181, 93, 78, 0.16)", ink: "#4b231f" },
-  teal: { base: "#2f8a73", soft: "rgba(47, 138, 115, 0.16)", ink: "#10342b" },
-  amber: { base: "#b8860b", soft: "rgba(184, 134, 11, 0.16)", ink: "#4c3604" },
+  purple: { base: "#534AB7", soft: "rgba(83, 74, 183, 0.15)", ink: "#1e1a4a" },
+  coral: { base: "#D85A30", soft: "rgba(216, 90, 48, 0.16)", ink: "#4b1a0c" },
+  teal: { base: "#1D9E75", soft: "rgba(29, 158, 117, 0.16)", ink: "#0a3328" },
+  amber: { base: "#BA7517", soft: "rgba(186, 117, 23, 0.16)", ink: "#4c3000" },
 };
 
 const ROOM_CODE_REGEX = /^[A-Z]{3}-[A-Z0-9]-[A-Z0-9]{4}$/;

@@ -41,7 +41,6 @@ import {
 } from "../ui/appModel.ts";
 import {
   getHandCardInteractionMode,
-  getMatchInstructionMeta,
   getPrimaryActionConfig,
   getRollFeedbackCopy,
   getTileSelectionPreview,
@@ -197,6 +196,20 @@ function renderInstructionWithHighlight(instruction: string): React.ReactNode {
   );
 }
 
+function getPhaseChipProps(phase: string, interactionState?: string) {
+  if (interactionState === "combat") return { label: "Combat", className: "phase-chip phase-chip--combat" };
+  if (phase === "draw") return { label: "Draw", className: "phase-chip phase-chip--draw" };
+  if (phase === "roll") return { label: "Roll", className: "phase-chip phase-chip--roll" };
+  if (phase === "move") return { label: "Move", className: "phase-chip phase-chip--move" };
+  return { label: "Tile", className: "phase-chip phase-chip--tile" };
+}
+
+function PhaseChip({ phase, interactionState }: { phase: string; interactionState?: string }) {
+  const props = getPhaseChipProps(phase, interactionState);
+  if (!props) return null;
+  return <span className={props.className} aria-hidden="true">{props.label}</span>;
+}
+
 function createTutorialBoundingBox(
   rect: Pick<TutorialBoundingBox, "top" | "left" | "right" | "bottom">,
   padding: number,
@@ -315,7 +328,7 @@ function MatchBoardGrid({
                 : engineWyrmId;
           const wyrm = displayWyrmId ? state.wyrms[displayWyrmId] : null;
           const trailRoundsRemaining = cell.trail ? cell.trail.expiresAfterRound - state.currentRound : 0;
-          const trailOpacity = trailRoundsRemaining >= 2 ? 0.9 : trailRoundsRemaining === 1 ? 0.5 : 0.2;
+          const trailOpacity = trailRoundsRemaining >= 3 ? 1.0 : trailRoundsRemaining === 2 ? 0.55 : 0.28;
           const selectedWyrm = selectedWyrmId && wyrm?.id === selectedWyrmId;
           const canUndoStep = inPath && pathIndex === selectedPath.length - 2;
           const canSelectMover =
@@ -702,33 +715,6 @@ export function MatchScreen({
   const victoryOverlayCopy = getVictoryOverlayCopy(state, playerNames);
   const victoryAccentColor = state.winner ? getColorValue(playerColors[state.winner]) : currentPlayerColor;
   const canRestartMatch = !onMatchComplete && (localMode || Boolean(onRestartMatch));
-  const instructionMeta = useMemo(
-    () =>
-      getMatchInstructionMeta({
-        state,
-        tileDraft,
-        deployWyrmId,
-        trailWyrmId,
-        hasSelectedMove: selectedMove != null,
-        canConfirmMove,
-        hoardChoicesCount: currentPlayer.hoard.length,
-        interactionState,
-        stepsRemaining,
-        tileDraftReady: canConfirmTileDraft,
-      }),
-    [
-      canConfirmMove,
-      canConfirmTileDraft,
-      currentPlayer.hoard.length,
-      deployWyrmId,
-      interactionState,
-      selectedMove,
-      state,
-      stepsRemaining,
-      tileDraft,
-      trailWyrmId,
-    ],
-  );
   const rollFeedback = useMemo(() => getRollFeedbackCopy(state), [state]);
   const tileSelectionPreview = useMemo(() => getTileSelectionPreview(tileDraft), [tileDraft]);
   const tileSelectionSuggestion = useMemo(
@@ -826,6 +812,25 @@ export function MatchScreen({
       selectedMove.moveMode,
     );
   }, [hoveredCommittedPath, selectedMove, state, stepsRemaining]);
+
+  const hoveredTilePreview = useMemo(() => {
+    if (!hoveredBoardCoord || hoveredMoveSummary) {
+      return null;
+    }
+
+    const row = state.board[hoveredBoardCoord.row];
+    if (!row) return null;
+    const cell = row[hoveredBoardCoord.col];
+    if (!cell) return null;
+
+    if (cell.type.startsWith("den_p")) {
+      const ownerId = Number(cell.type.slice(-1)) as PlayerId;
+      const ownerName = playerNames[ownerId] || ownerId;
+      return `${ownerName}'s Den`;
+    }
+
+    return null;
+  }, [hoveredBoardCoord, hoveredMoveSummary, playerNames, state.board]);
 
   // Show pass-the-screen overlay whenever the active player changes in local mode
   useEffect(() => {
@@ -1436,6 +1441,22 @@ export function MatchScreen({
     game.startNewGame(state.playerCount);
   };
 
+  const getPrimaryActionLabel = () => {
+    if (phase === "move") {
+      if (deployWyrmId) return "Deploy Wyrm";
+      if (trailWyrmId) return "Place Coil";
+      if (interactionState === "wyrm_selected" || interactionState === "moving") return "Choose Destination";
+      return "Your Turn: Select a Wyrm";
+    }
+    if (phase === "tile") {
+      if (tileDraft) return "Select Target";
+      return "Select Ability";
+    }
+    if (phase === "roll") return "Roll to Move";
+    if (phase === "draw") return "Draw Tiles";
+    return "Next Phase";
+  };
+
   return (
     <main className="match-screen">
       {localMode && showPassOverlay && !showVictoryOverlay && (
@@ -1996,7 +2017,7 @@ export function MatchScreen({
                 .join(" ")}
               aria-live="polite"
             >
-              <span className="match-instruction-bar__icon" aria-hidden="true">&rarr;</span>
+              <PhaseChip phase={phase} interactionState={hoveredMoveSummary?.immediateVictory ? "combat" : interactionState} />
               <div className="match-instruction-bar__copy">
                 {hoveredMoveSummary ? (
                   <div className="move-consequence-hint">
@@ -2026,14 +2047,19 @@ export function MatchScreen({
                     <p className="match-board-guidance__hint">
                       {interactionError
                         ? interactionError.message
-                        : isAutoCoilState
-                          ? "No Wyrms can move — place a trail instead"
-                          : renderInstructionWithHighlight(guidance.message)}
+                        : hoveredTilePreview
+                          ? hoveredTilePreview
+                          : isAutoCoilState
+                            ? "Must Place Trail"
+                            : getPrimaryActionLabel()}
                     </p>
                     <p className="match-board-guidance__sub">
                       {interactionError
                         ? "[Action blocked]"
-                        : guidance.subMessage || (instructionMeta ? instructionMeta : "")}
+                        : hoveredTilePreview
+                          ? (isAutoCoilState ? "No Wyrms can move — place a trail instead" : guidance.message)
+                          : renderInstructionWithHighlight(guidance.message)}
+                      {guidance.subMessage ? ` - ${guidance.subMessage}` : null}
                     </p>
                     {selectedMove ? (
                       <div className="match-board-guidance__steps">
