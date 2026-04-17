@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { Wordmark } from "../components/Wordmark.tsx";
 import { toRoman, type MatchRecord } from "../ui/appModel.ts";
+import { getDisplayName, isSupporter, stripFounderBadge } from "../ui/supporterModel.ts";
 
 interface ChronicleScreenProps {
   record: MatchRecord;
@@ -40,6 +41,11 @@ export function ChronicleScreen({
     });
     return Array.from(groups.entries());
   }, [visibleEvents]);
+  const localPlayerName = getDisplayName(record.localPlayerName, isSupporter());
+  const activePlayerName = currentEvent?.playerName
+    ? getDisplayName(currentEvent.playerName, currentEvent.playerId === record.localPlayerId && isSupporter())
+    : getDisplayName(record.winnerName, record.winnerId === record.localPlayerId && isSupporter());
+  const winnerName = getDisplayName(record.winnerName, record.winnerId === record.localPlayerId && isSupporter());
 
   return (
     <main className="shell-page chronicle-screen">
@@ -57,11 +63,11 @@ export function ChronicleScreen({
         <header className="chronicle-main__header">
           <div>
             <h1>The Chronicle</h1>
-            <p>Scribe: {record.localPlayerName} | Session #{record.id}</p>
+            <p>Scribe: {localPlayerName} | Session #{record.id}</p>
           </div>
           <div className="info-pills">
             <span>Current Round {toRoman(currentEvent?.round ?? 1)}</span>
-            <span>Active Player {currentEvent?.playerName ?? record.winnerName}</span>
+            <span>Active Player {activePlayerName}</span>
           </div>
         </header>
 
@@ -85,7 +91,7 @@ export function ChronicleScreen({
                 >
                   <div className="chronicle-event__lead">
                     <span className="chronicle-event__avatar" style={{ backgroundColor: "var(--accent-amber)" }}>
-                      {event.playerName[0]}
+                      {stripFounderBadge(event.playerName)[0]}
                     </span>
                     <div>
                       {event.eventType === "combat" ? <span className="chronicle-event__header">COMBAT ENCOUNTER</span> : null}
@@ -143,7 +149,7 @@ export function ChronicleScreen({
             ))}
           </div>
 
-          <div className="victory-indicator">{record.winnerName} prevailed</div>
+          <div className="victory-indicator">{winnerName} prevailed</div>
         </footer>
       </section>
     </main>

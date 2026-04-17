@@ -54,6 +54,7 @@ import {
   type PlayerGuidance,
 } from "../ui/guidanceModel.ts";
 import { MATCH_MOTION_MS, getResponsiveMotionMode } from "../ui/matchMotion.ts";
+import { getDisplayName, hasFounderBadge, isSupporter, stripFounderBadge } from "../ui/supporterModel.ts";
 import { useMatchInteractions } from "../ui/useMatchInteractions.ts";
 import { getMatchBoardCellSize } from "./matchBoardSizing.ts";
 
@@ -120,6 +121,7 @@ interface MatchBoardGridProps {
   freshTrailKeys: string[];
   ghostMove: GhostMoveState | null;
   playerNames: Record<PlayerId, string>;
+  supporterPlayerIds: Record<PlayerId, boolean>;
   disabled: boolean;
   movableWyrmIds: string[];
   guidance?: PlayerGuidance;
@@ -279,6 +281,7 @@ function MatchBoardGrid({
   freshTrailKeys,
   ghostMove,
   playerNames,
+  supporterPlayerIds,
   disabled,
   movableWyrmIds,
   guidance,
@@ -390,6 +393,7 @@ function MatchBoardGrid({
                   className={[
                     "match-board-cell__trail",
                     `match-board-cell__trail--${cell.trail.owner}`,
+                    supporterPlayerIds[cell.trail.owner] ? "match-board-cell__trail--gold" : "",
                     freshTrailKeys.includes(getCoordKey(coord)) ? "match-board-cell__trail--fresh" : "",
                   ]
                     .filter(Boolean)
@@ -631,14 +635,55 @@ export function MatchScreen({
   const playerNames = useMemo<Record<PlayerId, string>>(() => {
     if (localMode && localPlayerNames) {
       return {
-        1: localPlayerNames[1] ?? "Player 1",
-        2: localPlayerNames[2] ?? "Player 2",
-        3: localPlayerNames[3] ?? "Player 3",
-        4: localPlayerNames[4] ?? "Player 4",
+        1: stripFounderBadge(localPlayerNames[1] ?? "Player 1"),
+        2: stripFounderBadge(localPlayerNames[2] ?? "Player 2"),
+        3: stripFounderBadge(localPlayerNames[3] ?? "Player 3"),
+        4: stripFounderBadge(localPlayerNames[4] ?? "Player 4"),
       };
     }
-    return mapSeatNamesByPlayerId(room);
+    const seatNames = mapSeatNamesByPlayerId(room);
+    return {
+      1: stripFounderBadge(seatNames[1]),
+      2: stripFounderBadge(seatNames[2]),
+      3: stripFounderBadge(seatNames[3]),
+      4: stripFounderBadge(seatNames[4]),
+    };
   }, [localMode, localPlayerNames, room]);
+
+  const localPlayerId = useMemo<PlayerId | null>(() => {
+    if (localMode) {
+      return 1;
+    }
+    return room.seats.find((seat) => seat.currentUser)?.playerId ?? null;
+  }, [localMode, room]);
+
+  const supporterPlayerIds = useMemo<Record<PlayerId, boolean>>(() => {
+    if (localMode) {
+      return {
+        1: isSupporter(),
+        2: false,
+        3: false,
+        4: false,
+      };
+    }
+
+    return room.seats.reduce<Record<PlayerId, boolean>>(
+      (flags, seat) => {
+        if (seat.playerId) {
+          flags[seat.playerId] = hasFounderBadge(seat.name);
+        }
+        return flags;
+      },
+      { 1: false, 2: false, 3: false, 4: false },
+    );
+  }, [localMode, room]);
+
+  const playerDisplayNames = useMemo<Record<PlayerId, string>>(() => ({
+    1: getDisplayName(playerNames[1], supporterPlayerIds[1]),
+    2: getDisplayName(playerNames[2], supporterPlayerIds[2]),
+    3: getDisplayName(playerNames[3], supporterPlayerIds[3]),
+    4: getDisplayName(playerNames[4], supporterPlayerIds[4]),
+  }), [playerNames, supporterPlayerIds]);
 
   const playerColors = useMemo<Record<PlayerId, PlayerColor>>(() => {
     if (localMode) {
@@ -654,22 +699,27 @@ export function MatchScreen({
 
   const playerLabels = useMemo<Record<PlayerId, string>>(() => ({
     1:
-      localPlayerBots?.[1] && !playerNames[1].toLowerCase().includes(localPlayerBots[1].toLowerCase())
-        ? `${playerNames[1]} (${localPlayerBots[1]})`
-        : playerNames[1],
+      localPlayerBots?.[1] && !playerDisplayNames[1].toLowerCase().includes(localPlayerBots[1].toLowerCase())
+        ? `${playerDisplayNames[1]} (${localPlayerBots[1]})`
+        : playerDisplayNames[1],
     2:
-      localPlayerBots?.[2] && !playerNames[2].toLowerCase().includes(localPlayerBots[2].toLowerCase())
-        ? `${playerNames[2]} (${localPlayerBots[2]})`
-        : playerNames[2],
+      localPlayerBots?.[2] && !playerDisplayNames[2].toLowerCase().includes(localPlayerBots[2].toLowerCase())
+        ? `${playerDisplayNames[2]} (${localPlayerBots[2]})`
+        : playerDisplayNames[2],
     3:
-      localPlayerBots?.[3] && !playerNames[3].toLowerCase().includes(localPlayerBots[3].toLowerCase())
-        ? `${playerNames[3]} (${localPlayerBots[3]})`
-        : playerNames[3],
+      localPlayerBots?.[3] && !playerDisplayNames[3].toLowerCase().includes(localPlayerBots[3].toLowerCase())
+        ? `${playerDisplayNames[3]} (${localPlayerBots[3]})`
+        : playerDisplayNames[3],
     4:
-      localPlayerBots?.[4] && !playerNames[4].toLowerCase().includes(localPlayerBots[4].toLowerCase())
-        ? `${playerNames[4]} (${localPlayerBots[4]})`
-        : playerNames[4],
-  }), [localPlayerBots, playerNames]);
+      localPlayerBots?.[4] && !playerDisplayNames[4].toLowerCase().includes(localPlayerBots[4].toLowerCase())
+        ? `${playerDisplayNames[4]} (${localPlayerBots[4]})`
+        : playerDisplayNames[4],
+  }), [localPlayerBots, playerDisplayNames]);
+
+  const localPlayer =
+    (localPlayerId != null ? state.players.find((player) => player.id === localPlayerId) : null)
+    ?? currentPlayer;
+  const isLocalTurn = localPlayerId != null && currentPlayer.id === localPlayerId;
 
   const currentPlayerColor = getColorValue(playerColors[currentPlayer.id]);
   const activePlayerName = playerLabels[currentPlayer.id];
@@ -687,6 +737,7 @@ export function MatchScreen({
     canPlayTiles,
     isInteractionLocked,
   });
+  const viewerHandCardInteractionMode = isLocalTurn ? handCardInteractionMode : "disabled";
   const primaryAction = getPrimaryActionConfig({
     phase,
     canConfirmDiscard,
@@ -712,7 +763,7 @@ export function MatchScreen({
       onMatchComplete(state);
     }
   }, [state.winner, state, onMatchComplete]);
-  const victoryOverlayCopy = getVictoryOverlayCopy(state, playerNames);
+  const victoryOverlayCopy = getVictoryOverlayCopy(state, playerDisplayNames);
   const victoryAccentColor = state.winner ? getColorValue(playerColors[state.winner]) : currentPlayerColor;
   const canRestartMatch = !onMatchComplete && (localMode || Boolean(onRestartMatch));
   const rollFeedback = useMemo(() => getRollFeedbackCopy(state), [state]);
@@ -991,7 +1042,7 @@ export function MatchScreen({
     }, 1500);
   }, [clearErrorToastTimer, interactionError, state.error]);
 
-  const trayTiles = currentPlayer.hand;
+  const trayTiles = localPlayer.hand;
   const tileCounts = useMemo(
     () =>
       trayTiles.reduce<Record<RuneTileType, number>>((counts, tile) => {
@@ -1012,7 +1063,7 @@ export function MatchScreen({
     return tileIndex === -1 ? 2 : tileIndex;
   }, [lairTile, trayTiles]);
   const handListEntries = useMemo(() => {
-    if (phase === "discard") {
+    if (viewerHandCardInteractionMode === "discard") {
       return trayTiles.map((tile, index) => ({
         key: `${tile}-${index}`,
         tile,
@@ -1022,11 +1073,12 @@ export function MatchScreen({
           ? "Next click"
           : discardSelection.includes(index)
             ? "Selected to discard"
-            : "Tap to discard",
+            : "Must discard",
         active: discardSelection.includes(index),
-        guided: guidanceHasTarget(guidance, { kind: "discard_index", index }),
-        suggested: guidanceSuggestsTarget(guidance, { kind: "discard_index", index }),
-        onActivate: handCardInteractionMode === "discard" ? () => toggleDiscard(index) : undefined,
+        guided: isLocalTurn && guidanceHasTarget(guidance, { kind: "discard_index", index }),
+        suggested: isLocalTurn && guidanceSuggestsTarget(guidance, { kind: "discard_index", index }),
+        discardRequired: !discardSelection.includes(index),
+        onActivate: viewerHandCardInteractionMode === "discard" ? () => toggleDiscard(index) : undefined,
         onPlayLair: undefined as (() => void) | undefined,
       }));
     }
@@ -1047,29 +1099,34 @@ export function MatchScreen({
         copies,
         countLabel: `x${copies}`,
         detail:
-          handCardInteractionMode === "play"
+          viewerHandCardInteractionMode === "play"
             ? copies >= 3
               ? "Invoke or use Lair ×3"
               : "Tap to preview"
             : TILE_HELP[tile],
         active,
-        guided: guidanceHasTarget(guidance, { kind: "hand_tile", tile }),
-        suggested: guidanceSuggestsTarget(guidance, { kind: "hand_tile", tile }),
-        onActivate: handCardInteractionMode === "play" ? () => startTileDraft(tile, "single") : undefined,
+        guided: isLocalTurn && guidanceHasTarget(guidance, { kind: "hand_tile", tile }),
+        suggested: isLocalTurn && guidanceSuggestsTarget(guidance, { kind: "hand_tile", tile }),
+        discardRequired: false,
+        onActivate: viewerHandCardInteractionMode === "play" ? () => startTileDraft(tile, "single") : undefined,
         onPlayLair:
-          handCardInteractionMode === "play" && copies >= 3
+          viewerHandCardInteractionMode === "play" && copies >= 3
             ? () => startTileDraft(tile, "lair")
             : undefined,
       }];
     });
-  }, [discardSelection, guidance, handCardInteractionMode, phase, startTileDraft, tileCounts, tileDraft, toggleDiscard, trayTiles]);
-
-  const localViewerPlayerId = useMemo<PlayerId | null>(() => {
-    if (localMode) {
-      return currentPlayer.id;
-    }
-    return room.seats.find((seat) => seat.currentUser)?.playerId ?? null;
-  }, [currentPlayer.id, localMode, room]);
+  }, [
+    discardSelection,
+    guidance,
+    isLocalTurn,
+    phase,
+    startTileDraft,
+    tileCounts,
+    tileDraft,
+    toggleDiscard,
+    trayTiles,
+    viewerHandCardInteractionMode,
+  ]);
 
   const canShowContextTooltips =
     hasResolvedTutorialVisibility
@@ -1077,8 +1134,8 @@ export function MatchScreen({
     && !passOverlayBlocking
     && !isPaused
     && phase !== "end"
-    && localViewerPlayerId != null
-    && currentPlayer.id === localViewerPlayerId;
+    && localPlayerId != null
+    && currentPlayer.id === localPlayerId;
 
   const tooltipSnapshot = useMemo<ContextTooltipTriggerSnapshot>(
     () => ({
@@ -1086,9 +1143,9 @@ export function MatchScreen({
       moveTargets,
       hoardChoicesCount: hoardChoices.length,
       lairTile,
-      viewerPlayerId: localViewerPlayerId,
+      viewerPlayerId: localPlayerId,
     }),
-    [state, moveTargets, hoardChoices.length, lairTile, localViewerPlayerId],
+    [state, moveTargets, hoardChoices.length, lairTile, localPlayerId],
   );
 
   useEffect(() => {
@@ -1450,7 +1507,7 @@ export function MatchScreen({
     }
     if (phase === "tile") {
       if (tileDraft) return "Select Target";
-      return "Select Ability";
+      return "Select a Rune Tile";
     }
     if (phase === "roll") return "Roll to Move";
     if (phase === "draw") return "Draw Tiles";
@@ -1678,14 +1735,15 @@ export function MatchScreen({
 
             <div className="match-sidebar__section match-sidebar__section--grow">
               <span className="match-sidebar__label">My Hand</span>
-              {tileDraft && tileSelectionSuggestion ? (
+              {isLocalTurn && tileDraft && tileSelectionSuggestion ? (
                 <div className="legacy-tray__suggestion">{tileSelectionSuggestion}</div>
               ) : null}
                <div
                  ref={handCardsRef}
                  className={[
                    "match-hand-list",
-                   activePulseRegion === "hand" || (guidanceReinforced && guidance.highlightHint === "hand")
+                   (isLocalTurn && activePulseRegion === "hand")
+                   || (isLocalTurn && guidanceReinforced && guidance.highlightHint === "hand")
                      ? "hint-pulse hint-pulse--hand"
                      : "",
                  ]
@@ -1699,6 +1757,7 @@ export function MatchScreen({
                       className={[
                         "match-hand-list__button",
                         entry.active ? "match-hand-list__button--active" : "",
+                        entry.discardRequired ? "match-hand-list__button--discard-required" : "",
                         entry.guided ? "guidance-target--guided match-hand-list__button--guided" : "",
                         entry.suggested ? "guidance-target--suggested" : "",
                         entry.guided && guidanceReinforced ? "guidance-target--reinforced" : "",
@@ -1718,7 +1777,10 @@ export function MatchScreen({
                         </span>
                         <span className="match-hand-list__detail">{entry.detail}</span>
                       </span>
-                      <span className="match-hand-list__count">{entry.countLabel}</span>
+                      <span className="match-hand-list__count">
+                        {entry.discardRequired ? <span className="match-hand-list__discard-chip">Discard</span> : null}
+                        {entry.countLabel}
+                      </span>
                     </button>
                     {entry.onPlayLair ? (
                       <button
@@ -1801,7 +1863,7 @@ export function MatchScreen({
             {visiblePeekHand.length > 0 ? (
               <div style={{ position: 'absolute', top: '2.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 9, padding: '0.6rem 1rem', borderRadius: '0.75rem', background: 'rgba(13, 23, 14, 0.85)', backdropFilter: 'blur(6px)', border: '1px solid rgba(240, 234, 214, 0.1)', maxWidth: '90%' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.4rem' }}>
-                  <strong style={{ fontSize: '0.75rem' }}>Revealed Hand{peekPlayerId ? `: ${playerNames[peekPlayerId]}` : ""}</strong>
+                  <strong style={{ fontSize: '0.75rem' }}>Revealed Hand{peekPlayerId ? `: ${playerLabels[peekPlayerId]}` : ""}</strong>
                   <button type="button" className="text-link" style={{ fontSize: '0.75rem' }} onClick={() => setPeekPlayerId(null)}>Close</button>
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
@@ -1968,6 +2030,7 @@ export function MatchScreen({
                 freshTrailKeys={freshTrailKeys}
                 ghostMove={ghostMove}
                 playerNames={playerNames}
+                supporterPlayerIds={supporterPlayerIds}
                 disabled={showVictoryOverlay || isPaused || (phase !== "move" && tileDraft == null && deployWyrmId == null && trailWyrmId == null)}
                 movableWyrmIds={movableWyrmIds}
                 guidance={guidance}
@@ -2071,6 +2134,16 @@ export function MatchScreen({
                     ) : null}
                   </div>
                 )}
+                {tileSelectionPreview ? (
+                  <div className="tile-selection-preview">
+                    <span className="tile-selection-preview__eyebrow">Rune Preview</span>
+                    <strong className="tile-selection-preview__title">{tileSelectionPreview.title}</strong>
+                    <p className="tile-selection-preview__detail">{tileSelectionPreview.detail}</p>
+                    {tileSelectionSuggestion ? (
+                      <p className="tile-selection-preview__suggestion">{tileSelectionSuggestion}</p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               <div className="match-instruction-bar__actions">
                 {showTempestToggle ? (
@@ -2342,11 +2415,13 @@ export function MatchScreen({
                 selectedForDiscard ||
                 (!isPaused && Boolean(tileDraft && "tile" in tileDraft && tileDraft.tile === tile)) ||
                 (!isPaused && Boolean(selectedMove && selectedMove.moveMode === "tempest" && index === 0));
+              const discardRequired = viewerHandCardInteractionMode === "discard" && !selectedForDiscard;
 
-              const trayCardPlayable = handCardInteractionMode !== "disabled";
+              const trayCardPlayable = viewerHandCardInteractionMode !== "disabled";
               const trayCardReason =
                 isPaused ? "Game is paused"
                 : phase === "end" ? "Game is over"
+                : !isLocalTurn ? "Wait for your turn"
                 : state.turnEffects.tileActionUsed ? "Already played a tile this turn"
                 : phase === "draw" ? "Draw a tile before playing runes"
                 : phase === "roll" ? "Roll the dice before playing runes"
@@ -2359,7 +2434,10 @@ export function MatchScreen({
               return (
                 <div
                   key={`${tile}-${index}`}
-                  className="legacy-tray__card"
+                  className={[
+                    "legacy-tray__card",
+                    discardRequired ? "legacy-tray__card--must-discard" : "",
+                  ].filter(Boolean).join(" ")}
                   style={{ transform: `translateY(${index === lairFocusIndex && lairTile ? -18 : 0}px) rotate(${(index - (trayTiles.length - 1) / 2) * 3}deg)` }}
                 >
                   <RuneTileCard
@@ -2369,18 +2447,18 @@ export function MatchScreen({
                     active={cardActive}
                     elevated={index === lairFocusIndex && Boolean(lairTile)}
                     lairReady={lairTile === tile && copies >= 3}
-                    disabled={handCardInteractionMode === "disabled"}
+                    disabled={viewerHandCardInteractionMode === "disabled"}
                     playable={trayCardPlayable}
                     unplayableReason={trayCardReason}
                     onActivate={
-                      handCardInteractionMode === "discard"
+                      viewerHandCardInteractionMode === "discard"
                         ? () => toggleDiscard(index)
-                        : handCardInteractionMode === "play"
+                        : viewerHandCardInteractionMode === "play"
                           ? () => startTileDraft(tile, "single")
                           : undefined
                     }
                     onPlayLair={
-                      handCardInteractionMode === "play" && copies >= 3
+                      viewerHandCardInteractionMode === "play" && copies >= 3
                         ? () => startTileDraft(tile, "lair")
                         : undefined
                     }

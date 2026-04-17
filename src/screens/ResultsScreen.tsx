@@ -3,6 +3,7 @@ import React, { useEffect, useEffectEvent, useState } from "react";
 import { LoadingPulse } from "../components/LoadingPulse.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
 import { toRoman, type MatchRecord } from "../ui/appModel.ts";
+import { getDisplayName, isSupporter } from "../ui/supporterModel.ts";
 
 interface ResultsScreenProps {
   record: MatchRecord;
@@ -29,6 +30,7 @@ export function ResultsScreen({
 }: ResultsScreenProps): React.JSX.Element {
   const [opponentConnected, setOpponentConnected] = useState(record.opponentStillConnected ?? true);
   const runOpponentCheck = useEffectEvent(onCheckOpponent);
+  const winnerName = getDisplayName(record.winnerName, record.winnerId === record.localPlayerId && isSupporter());
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -51,7 +53,7 @@ export function ResultsScreen({
       <section className="results-screen__content">
         <div className="results-screen__left">
           <p className="results-screen__eyebrow">Masterwork Edition</p>
-          <h1>{record.winnerName}</h1>
+          <h1>{winnerName}</h1>
           <p className="results-screen__quote">{record.flavorQuote}</p>
           <span className="results-screen__session">{toRoman(record.sessionIndex)}</span>
         </div>

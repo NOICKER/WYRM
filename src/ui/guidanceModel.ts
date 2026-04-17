@@ -523,11 +523,11 @@ export function getCurrentPlayerGuidance({
       return buildGuidance({
         type: "SELECTION_REQUIRED",
         message: hoardTargets.length > 0
-          ? "Click one glowing Wyrm on the board to start moving, or click a ready hoarded Wyrm in the left sidebar to deploy it."
-          : "Click one glowing Wyrm on the board to start your move.",
+          ? "Click one of your Wyrm tokens on the board to start moving, or click a ready hoarded Wyrm in the left sidebar to deploy it."
+          : "Click one of your Wyrm tokens on the board to start your move.",
         subMessage: hoardTargets.length > 0
-          ? "Only the glowing board Wyrms and ready hoard tokens are valid move starters."
-          : "Only the glowing board Wyrms are valid move starters.",
+          ? "Only your movable board Wyrms and ready hoard tokens are valid move starters."
+          : "Only your movable board Wyrms are valid move starters.",
         highlightHint: "wyrms",
         priority: 120,
         validTargets: [...boardTargets, ...hoardTargets],
@@ -539,7 +539,7 @@ export function getCurrentPlayerGuidance({
       return buildGuidance({
         type: "SELECTION_REQUIRED",
         message: "Click one ready hoarded Wyrm in the left sidebar to redeploy it.",
-        subMessage: "Only the glowing hoard tokens are valid deployment starters.",
+        subMessage: "Only ready hoard tokens are valid deployment starters.",
         highlightHint: "controls",
         priority: 120,
         validTargets: hoardSelectableWyrmIds.map((wyrmId) => hoardWyrmTarget(wyrmId)),
@@ -551,7 +551,7 @@ export function getCurrentPlayerGuidance({
       return buildGuidance({
         type: "SELECTION_REQUIRED",
         message: "Click the blocked Wyrm on the board, then place its highlighted escape trail.",
-        subMessage: "Only the glowing blocked Wyrms can place a trail right now.",
+        subMessage: "Only blocked Wyrms with an escape trail can act right now.",
         highlightHint: "wyrms",
         priority: 125,
         validTargets: blockedTrailWyrmIds.map((wyrmId) => boardWyrmTarget(wyrmId)),
@@ -566,13 +566,13 @@ export function getCurrentPlayerGuidance({
       return buildGuidance({
         type: "TILE_REQUIRED",
         message: playableTileTypes.length === 1
-          ? `Click ${getTileName(playableTileTypes[0])} in your hand to preview it.`
+          ? `Select ${getTileName(playableTileTypes[0])} from your hand below.`
           : canEndTurn
-            ? "Click a highlighted Rune Tile in your hand to preview it, or click Skip to end the turn."
-            : "Click a highlighted Rune Tile in your hand to preview it.",
+            ? "Select a Rune Tile from your hand below, or click Skip to end the turn."
+            : "Select a Rune Tile from your hand below.",
         subMessage: canEndTurn
-          ? "The glowing hand cards are playable now, and Skip stays available if you want to hold them."
-          : "Only the glowing hand cards are playable right now.",
+          ? "Playable Rune Tiles stay highlighted, and Skip stays available if you want to hold them."
+          : "Only playable Rune Tiles are active right now.",
         highlightHint: "hand",
         priority: 90,
         validTargets: [...tileTargets, ...(canEndTurn ? [controlTarget("primary_action")] : [])],
@@ -596,7 +596,7 @@ export function getCurrentPlayerGuidance({
   return buildGuidance({
     type: "ACTION_REQUIRED",
     message: "Use the highlighted action to continue.",
-    subMessage: "The next valid target is already glowing.",
+    subMessage: "The next valid target is already highlighted.",
     highlightHint: "controls",
     priority: 0,
     validTargets: [],

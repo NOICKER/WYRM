@@ -4,6 +4,7 @@ import { LoadingPulse } from "../components/LoadingPulse.tsx";
 import { ScreenError } from "../components/ScreenError.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
 import { canHostCommence, type AssemblyRoom } from "../ui/appModel.ts";
+import { stripFounderBadge } from "../ui/supporterModel.ts";
 
 interface AssemblyLobbyScreenProps {
   room: AssemblyRoom;
@@ -59,7 +60,7 @@ export function AssemblyLobbyScreen({
             >
               {seat.occupied ? (
                 <>
-                  <div className="seat-card__avatar">{seat.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</div>
+                  <div className="seat-card__avatar">{stripFounderBadge(seat.name).split(" ").map((part) => part[0]).join("").slice(0, 2)}</div>
                   <div className="seat-card__body">
                     <strong>{seat.name}</strong>
                     <span className="level-badge">Lv. {seat.level}</span>

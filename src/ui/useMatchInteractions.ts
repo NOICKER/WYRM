@@ -199,6 +199,31 @@ export function useMatchInteractions(): MatchInteractionsResult {
     return state.turnEffects.tempestRushRemaining.filter((id) => hasAnyLegalMove(state, id, "tempest"));
   }, [currentPlayer.id, phase, state]);
 
+  useEffect(() => {
+    if (!import.meta.env.DEV || phase !== "move" || state.turnEffects.mainMoveCompleted) {
+      return;
+    }
+    if (state.dieResult === "coil" && state.turnEffects.coilChoice == null) {
+      return;
+    }
+
+    const mainMovable = getWyrmsWithLegalMoves(state, currentPlayer.id, "main");
+    const tempestMovable = state.turnEffects.tempestRushRemaining.filter((id) => hasAnyLegalMove(state, id, "tempest"));
+    const hasLegalStarter = mainMovable.length > 0 || tempestMovable.length > 0;
+
+    console.assert(
+      !hasLegalStarter || movableWyrmIds.length > 0,
+      "Expected movableWyrmIds during move phase when legal moves exist.",
+      {
+        playerId: currentPlayer.id,
+        dieResult: state.dieResult,
+        mainMovable,
+        tempestMovable,
+        movableWyrmIds,
+      },
+    );
+  }, [currentPlayer.id, movableWyrmIds, phase, state]);
+
   const isAutoCoilState = useMemo(() => {
     if (phase !== "move" || state.turnEffects.mainMoveCompleted) {
       return false;

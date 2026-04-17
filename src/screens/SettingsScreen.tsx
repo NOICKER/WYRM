@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from "react";
 
+import { SupportModal } from "../components/SupportModal.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
 import type { MatchRecord, UserProfile } from "../ui/appModel.ts";
 import { formatMatchHistoryDate } from "../ui/settingsPreferences.ts";
+import { getDisplayName, isSupporter } from "../ui/supporterModel.ts";
 
 interface SettingsScreenProps {
   profile: UserProfile;
@@ -81,6 +83,7 @@ export function SettingsScreen({
 }: SettingsScreenProps): React.JSX.Element {
   const [displayName, setDisplayName] = useState(profile.username);
   const [displayNameSaved, setDisplayNameSaved] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
 
   const canSaveDisplayName = useMemo(() => {
     const trimmed = displayName.trim();
@@ -126,7 +129,7 @@ export function SettingsScreen({
         </nav>
 
         <div className="sidebar-profile">
-          <span>{profile.username}</span>
+          <span>{getDisplayName(profile.username, isSupporter())}</span>
         </div>
       </aside>
 
@@ -260,7 +263,15 @@ export function SettingsScreen({
             </div>
           </section>
         </div>
+
+        <div className="settings-support">
+          <button type="button" className="support-link" onClick={() => setSupportOpen(true)}>
+            Support the creator ☕
+          </button>
+        </div>
       </section>
+
+      {supportOpen ? <SupportModal onClose={() => setSupportOpen(false)} /> : null}
     </main>
   );
 }

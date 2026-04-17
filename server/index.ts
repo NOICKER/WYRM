@@ -101,7 +101,7 @@ const queue = new MatchmakingQueue({
   },
 });
 
-const httpServer = createServer((_, response) => {
+const server = createServer((_, response) => {
   response.writeHead(200, {
     "content-type": "text/plain; charset=utf-8",
     "access-control-allow-origin": "*",
@@ -109,7 +109,7 @@ const httpServer = createServer((_, response) => {
   response.end("WYRM matchmaking server is running.\n");
 });
 
-const websocketServer = new WebSocketServer({ server: httpServer });
+const websocketServer = new WebSocketServer({ server });
 
 websocketServer.on("connection", (socket: WebSocket) => {
   registry.register(socket);
@@ -303,14 +303,15 @@ const heartbeat = setInterval(() => {
   }
 }, HEARTBEAT_INTERVAL_MS);
 
-httpServer.listen(PORT, () => {
-  console.log(`WYRM matchmaking server listening on ws://localhost:${PORT}`);
+server.listen(PORT, () => {
+  console.log("WYRM matchmaking server is running");
+  console.log(`WebSocket ready on port ${PORT}`);
 });
 
 function shutdown(): void {
   clearInterval(heartbeat);
   websocketServer.close();
-  httpServer.close();
+  server.close();
 }
 
 process.on("SIGINT", shutdown);

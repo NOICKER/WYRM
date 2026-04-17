@@ -1,5 +1,6 @@
 import type { GameState, PlayerColor, PlayerId, RuneTileType } from "../state/types.ts";
 import { PLAYER_ORDER_BY_COUNT, PLAYER_NAMES, TILE_HELP, TILE_LABELS } from "../state/gameLogic.ts";
+import { getDisplayName, isSupporter, stripFounderBadge } from "./supporterModel.ts";
 
 export type AppRoute =
   | { name: "landing" }
@@ -297,7 +298,7 @@ export function toRoman(value: number): string {
 }
 
 export function getPlayerInitial(name: string): string {
-  const [first] = name.trim();
+  const [first] = stripFounderBadge(name).trim();
   return (first ?? "W").toUpperCase();
 }
 
@@ -387,6 +388,7 @@ export function createSeat(
 
 export function seedHostRoom(profile: UserProfile): AssemblyRoom {
   const roomId = generateAssemblyCode();
+  const displayName = getDisplayName(profile.username, isSupporter());
   return {
     id: roomId,
     code: roomId,
@@ -401,7 +403,7 @@ export function seedHostRoom(profile: UserProfile): AssemblyRoom {
     seats: [
       createSeat({
         id: "seat-1",
-        name: profile.username,
+        name: displayName,
         level: profile.level,
         host: true,
         currentUser: true,
@@ -432,6 +434,7 @@ export function seedHostRoom(profile: UserProfile): AssemblyRoom {
 }
 
 export function seedGuestRoom(profile: UserProfile, code: string): AssemblyRoom {
+  const displayName = getDisplayName(profile.username, isSupporter());
   return {
     id: code,
     code,
@@ -455,7 +458,7 @@ export function seedGuestRoom(profile: UserProfile, code: string): AssemblyRoom 
       }),
       createSeat({
         id: "seat-2",
-        name: profile.username,
+        name: displayName,
         level: profile.level,
         currentUser: true,
         playerId: 4,
@@ -566,7 +569,7 @@ export function buildMatchRecord(
     winnerName: seatNames[winnerId],
     winnerColor: seatColors[winnerId],
     localPlayerId: localSeat.playerId ?? 1,
-    localPlayerName: localProfile.username,
+    localPlayerName: getDisplayName(localProfile.username, isSupporter()),
     localPlayerColor: localSeat.color ?? "purple",
     result: winnerId === localSeat.playerId ? "win" : "loss",
     rounds: state.currentRound,

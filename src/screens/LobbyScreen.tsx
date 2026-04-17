@@ -3,9 +3,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionBanner } from "../components/ConnectionBanner.tsx";
 import { LoadingPulse } from "../components/LoadingPulse.tsx";
 import { ScreenError } from "../components/ScreenError.tsx";
+import { SupportModal } from "../components/SupportModal.tsx";
 import { Wordmark } from "../components/Wordmark.tsx";
 import type { ConnectionBannerStatus } from "../online/reconnectModel.ts";
 import type { MatchRecord, UserProfile } from "../ui/appModel.ts";
+import { getDisplayName, isSupporter } from "../ui/supporterModel.ts";
 
 interface LobbyScreenProps {
   profile: UserProfile;
@@ -60,6 +62,7 @@ export function LobbyScreen({
   onReplayChronicle,
 }: LobbyScreenProps): React.JSX.Element {
   const [roomCode, setRoomCode] = useState("");
+  const [supportOpen, setSupportOpen] = useState(false);
   const canJoin = useMemo(() => roomCode.trim().length > 0, [roomCode]);
   const mountedWithAutoCreateRef = useRef(autoCreateRoomOnMount);
   const autoCreateTriggeredRef = useRef(false);
@@ -102,12 +105,16 @@ export function LobbyScreen({
           />
         </nav>
 
+        <button type="button" className="support-link support-link--sidebar" onClick={() => setSupportOpen(true)}>
+          ☕ Support
+        </button>
+
         <div className="sidebar-lore">
           <p>Serpents. Trails.<br/>Ancient runes.</p>
         </div>
 
         <div className="sidebar-profile">
-          <span>{profile.username}</span>
+          <span>{getDisplayName(profile.username, isSupporter())}</span>
         </div>
       </aside>
 
@@ -199,6 +206,8 @@ export function LobbyScreen({
 
         <p className="page-quote">{quote}</p>
       </section>
+
+      {supportOpen ? <SupportModal onClose={() => setSupportOpen(false)} /> : null}
     </main>
   );
 }

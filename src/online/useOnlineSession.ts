@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AssemblyRoom, UserProfile } from "../ui/appModel.ts";
+import { getDisplayName, isSupporter } from "../ui/supporterModel.ts";
 import type {
   ClientMatchView,
   MatchActionPayload,
@@ -15,6 +16,7 @@ import {
   getReconnectStatusAfterSuccess,
   type ConnectionBannerStatus,
 } from "./reconnectModel.ts";
+import { getMatchmakingSocketUrl } from "./socketConfig.ts";
 import { OnlineSocketClient, type SocketClientState } from "./socketClient.ts";
 import { getOrCreateStableClientId } from "./sessionModel.ts";
 
@@ -56,16 +58,6 @@ interface OnlineSessionActions {
 
 export type OnlineSession = OnlineSessionState & OnlineSessionActions;
 
-function getMatchmakingSocketUrl(): string {
-  const configured = import.meta.env.VITE_MATCHMAKING_WS_URL;
-  if (configured) {
-    return configured;
-  }
-
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${protocol}://${window.location.hostname}:8787`;
-}
-
 export function useOnlineSession(profile: UserProfile | null): OnlineSession {
   const [connectionState, setConnectionState] = useState<OnlineSessionState["connectionState"]>("idle");
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -95,7 +87,7 @@ export function useOnlineSession(profile: UserProfile | null): OnlineSession {
     () =>
       profile
         ? {
-            username: profile.username,
+            username: getDisplayName(profile.username, isSupporter()),
             level: profile.level,
           }
         : null,
